@@ -1,0 +1,3 @@
+[pyinstaller40]
+hook-dirs = wgpu.__pyinstaller:get_hook_dirs
+tests = wgpu.__pyinstaller:get_test_dirs

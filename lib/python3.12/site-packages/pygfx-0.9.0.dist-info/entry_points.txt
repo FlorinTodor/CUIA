@@ -1,0 +1,4 @@
+[pyinstaller40]
+hook-dirs=pygfx.__pyinstaller:get_hook_dirs
+tests=pygfx.__pyinstaller:get_test_dirs
+

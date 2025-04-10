@@ -1,0 +1,60 @@
+Metadata-Version: 2.4
+Name: pylinalg
+Version: 0.6.7
+Summary: Linear algebra utilities for Python
+Keywords: graphics,3d,linear algebra
+Author: Almar Klein, Korijn van Golen
+Requires-Python: >= 3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: pylinalg[lint, tests, docs] ; extra == "dev"
+Requires-Dist: sphinx>7.2 ; extra == "docs"
+Requires-Dist: sphinx_rtd_theme ; extra == "docs"
+Requires-Dist: ruff ; extra == "lint"
+Requires-Dist: pytest ; extra == "tests"
+Requires-Dist: pytest-cov ; extra == "tests"
+Requires-Dist: pytest-watcher ; extra == "tests"
+Requires-Dist: hypothesis[numpy]~=6.61.0 ; extra == "tests"
+Requires-Dist: packaging ; extra == "tests"
+Requires-Dist: twine ; extra == "tests"
+Requires-Dist: scipy ; extra == "tests"
+Project-URL: Repository, https://github.com/pygfx/pylinalg
+Provides-Extra: dev
+Provides-Extra: docs
+Provides-Extra: lint
+Provides-Extra: tests
+
+# pylinalg
+
+[![CI](https://github.com/pygfx/pylinalg/actions/workflows/ci.yml/badge.svg)](https://github.com/pygfx/pylinalg/actions/workflows/ci.yml)
+[![Documentation Status
+](https://readthedocs.org/projects/pylinalg/badge/?version=latest)
+](https://pylinalg.readthedocs.io/en/latest/?badge=latest)
+[![PyPI version ](https://badge.fury.io/py/pylinalg.svg)
+](https://badge.fury.io/py/pylinalg)
+
+Linear algebra utilities for Python.
+
+<p align="center">
+[<a href="https://pylinalg.readthedocs.io/en/latest/reference.html">API Reference</a>]
+</p>
+
+## Installation
+
+```bash
+pip install pylinalg
+```
+
+### Development Install
+To get a working dev install of pylinalg you can use the following steps:
+
+```bash
+# Click the Fork button on GitHub and navigate to your fork
+git clone <address_of_your_fork>
+cd pylinalg
+# if you use a venv, create and activate it
+pip install -e ".[dev,docs,examples]"
+pytest tests
+```
+
