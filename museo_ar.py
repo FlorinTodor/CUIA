@@ -12,7 +12,14 @@ import copy
 import traceback
 import pyrender
 
-# ➋ Crea UN solo renderer global
+
+# Variables globales para persistencia de detección
+marcador_visible = None
+contador_visibilidad = 0
+UMBRAL_VISIBILIDAD = 5
+
+
+# ➋ Crea UN solo renderer globalizado 
 renderer = pyrender.OffscreenRenderer(640, 480)
 
 # Modelos 3D reales (formatos .glb)
@@ -73,8 +80,8 @@ for marcador_id, ruta in marcadores_modelos.items():
     modelos_precargados[marcador_id] = cargar_modelo_glb(ruta)
 
 # Inicialización reconocimiento de voz
-recognizer = sr.Recognizer()
-microphone = sr.Microphone()
+#recognizer = sr.Recognizer()
+#microphone = sr.Microphone()
 
 # Inicialización de parámetros de cámara y ArUco
 from camara import cameraMatrix as cam_matrix, distCoeffs as dist_coeffs
@@ -90,56 +97,54 @@ ultimo_marcador_mostrado = None
 
 # Mostrar modelo en overlay RA sobre marcador
 ##
-def overlay_modelo(frame, rvec, tvec, render_mesh):
+# Overlay mejorado con estabilidad y perspectiva
+def overlay_modelo_estable(frame, esquinas, rvec, tvec, render_mesh):
+    global marcador_visible, contador_visibilidad
+
     try:
-        # Crear matriz de pose desde rvec y tvec
-        rvec = np.asarray(rvec, dtype=np.float32).reshape(3)
-        tvec = np.asarray(tvec, dtype=np.float32).reshape(3)
+        # Pose del modelo 3D desde marcador
         rot_matrix, _ = cv2.Rodrigues(rvec)
         pose = np.eye(4, dtype=np.float32)
         pose[:3, :3] = rot_matrix
         pose[:3, 3] = tvec
 
-        # Crear escena
-        scene = pyrender.Scene(bg_color=[0, 0, 0, 0], ambient_light=[0.3, 0.3, 0.3, 1.0])
+        # Crear escena transparente
+        scene = pyrender.Scene(bg_color=[0, 0, 0, 0], ambient_light=[0.4, 0.4, 0.4, 1.0])
         scene.add(render_mesh, pose=pose)
 
-        # Luz
-        light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
+        # Luz fuerte desde la cámara
+        light = pyrender.DirectionalLight(color=np.ones(3), intensity=5.0)
         scene.add(light, pose=np.eye(4))
 
-        # Cámara virtual
+        # Cámara calibrada
         cam = pyrender.IntrinsicsCamera(
             fx=cam_matrix[0, 0], fy=cam_matrix[1, 1],
             cx=cam_matrix[0, 2], cy=cam_matrix[1, 2]
         )
         cam_pose = np.eye(4)
-        cam_pose[2, 3] = 0.2  # moderado
+        cam_pose[2, 3] = 0.2  # Aleja la cámara virtual para ver el objeto
         scene.add(cam, pose=cam_pose)
 
-        # Render con canal alfa
+        # Render RGBA
         render_rgba, _ = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
 
-        # DEBUG: Mostrar lo renderizado
-        cv2.imshow("DEBUG Render Only", cv2.cvtColor(render_rgba, cv2.COLOR_RGBA2BGR))
-        cv2.waitKey(1)
+       # Fuerza transparencia en píxeles negros
+        alpha_channel = np.where(
+            np.all(render_rgba[:, :, :3] == [0, 0, 0], axis=-1),
+            0, 255
+        ).astype(np.uint8)
+        render_rgba = np.dstack((render_rgba[:, :, :3], alpha_channel))
 
-        # Si la imagen no tiene canal alfa, añadirlo manualmente
-        if render_rgba.shape[2] == 3:
-            alpha_channel = np.ones(render_rgba.shape[:2], dtype=np.uint8) * 255
-            render_rgba = np.dstack((render_rgba, alpha_channel))
-
-        # Hacer alpha blending con el frame real
+        # Combinar con la imagen real de cámara
         blended = alphaBlending(render_rgba, frame)
-        blended_bgr = cv2.cvtColor(blended, cv2.COLOR_BGRA2BGR)
-        return blended_bgr
+        return cv2.cvtColor(blended, cv2.COLOR_BGRA2BGR)
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return frame
 
 # Escuchar pregunta por voz
+'''
 def escuchar_pregunta():
     with microphone as source:
         print("Escuchando pregunta...")
@@ -148,10 +153,11 @@ def escuchar_pregunta():
             return recognizer.recognize_google(audio, language="es-ES").lower()
         except:
             return None
-
+''' 
 # Bucle principal
 cap = cv2.VideoCapture(0)
 
+# Bucle principal mejorado
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -160,45 +166,56 @@ while True:
     gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     zona_detectada = reconocer_zona(gris)
     esquinas, ids = detectar_marcadores(gris)
-
-    if ids is not None:
-        for id_array in ids:
-            marcador = id_array[0]
-            for nombre, datos in zonas_imagenes.items():
-                if marcador in datos['ids']:
-                    zona_detectada = nombre
-                    break
-
-    if zona_detectada:
-        contador_zona[zona_detectada] = contador_zona.get(zona_detectada, 0) + 1
-        if contador_zona[zona_detectada] >= UMBRAL_ESTABILIDAD:
-            zona_estable = zona_detectada
-            contador_zona = {zona_estable: contador_zona[zona_detectada]}
-    else:
-        contador_zona = {}
-        zona_estable = "Zona desconocida"
-
-    if ids is not None:
+    if  ids is not None:
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(esquinas, 0.05, cam_matrix, dist_coeffs)
         for i, id_array in enumerate(ids):
-            marcador = id_array[0]
-            render_mesh = modelos_precargados.get(marcador)
+            marcador_actual = id_array[0]
 
-            if render_mesh:
-                cv2.polylines(frame, [esquinas[i].astype(int)], True, (0, 255, 0), 2)
-                cv2.putText(frame, f"Marcador {marcador}", tuple(esquinas[i][0][0].astype(int)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            # Actualiza visibilidad estable
+            if marcador_visible == marcador_actual:
+                contador_visibilidad += 1
+            else:
+                marcador_visible = marcador_actual
+                contador_visibilidad = 1
 
-                frame = overlay_modelo(frame, rvecs[i], tvecs[i], render_mesh)
+            # Estabilidad de zona
+            for nombre_zona, datos in zonas_imagenes.items():
+                if marcador_actual in datos["ids"]:
+                    zona_detectada = nombre_zona
+                    break
 
-                if marcador != ultimo_marcador_mostrado:
-                    ultimo_marcador_mostrado = marcador
-                    pregunta = escuchar_pregunta()
-                    if pregunta and ("información" in pregunta or "más" in pregunta):
-                        popup("Respuesta", np.zeros((200, 400, 3), dtype=np.uint8))
+            if zona_detectada:
+                contador_zona[zona_detectada] = contador_zona.get(zona_detectada, 0) + 1
+                if contador_zona[zona_detectada] >= UMBRAL_ESTABILIDAD:
+                    zona_estable = zona_detectada
+                    contador_zona = {zona_estable: contador_zona[zona_detectada]}
+            else:
+                contador_zona = {}
 
+            if contador_visibilidad >= UMBRAL_VISIBILIDAD:
+                render_mesh = modelos_precargados.get(marcador_actual)
+                if render_mesh:
+                    frame = overlay_modelo_estable(frame, esquinas[i], rvecs[i], tvecs[i], render_mesh)
+
+                    # Dibujar contorno y texto
+                    cv2.polylines(frame, [esquinas[i].astype(int)], True, (0, 255, 0), 2)
+                    cv2.putText(frame, f"Marcador {marcador_actual}", tuple(esquinas[i][0][0].astype(int)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+                    if marcador_actual != ultimo_marcador_mostrado:
+                        ultimo_marcador_mostrado = marcador_actual
+                        #pregunta = escuchar_pregunta()
+                        #if pregunta and ("información" in pregunta or "más" in pregunta):
+                         #   popup("Respuesta", np.zeros((200, 400, 3), dtype=np.uint8))
+    else:
+        contador_visibilidad = max(0, contador_visibilidad - 1)
+        if contador_visibilidad == 0:
+            marcador_visible = None
+
+    # Texto zona estable
     cv2.putText(frame, f"Te encuentras en: {zona_estable}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
     cv2.imshow('Museo AR', frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
