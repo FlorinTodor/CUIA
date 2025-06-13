@@ -20,17 +20,30 @@ for zona in zonas_imagenes.values():
         zona['kp'], zona['des'] = None, None
 
 def reconocer_zona(frame_gris):
+    """Devuelve el nombre de la zona cuya imagen se asemeja más al frame."""
+
     kp_frame, des_frame = orb.detectAndCompute(frame_gris, None)
     if des_frame is None:
         return None
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+    mejor_zona = None
+    mejores_coincidencias = 0
+
     for nombre, datos in zonas_imagenes.items():
-        if datos['des'] is not None:
-            matches = bf.match(datos['des'], des_frame)
-            good_matches = [m for m in matches if m.distance < 40]
-            if len(good_matches) > 20:
-                return nombre
+        if datos['des'] is None:
+            continue
+
+        matches = bf.match(datos['des'], des_frame)
+        good_matches = [m for m in matches if m.distance < 40]
+
+        if len(good_matches) > mejores_coincidencias:
+            mejores_coincidencias = len(good_matches)
+            mejor_zona = nombre
+
+    if mejores_coincidencias >= 20:
+        return mejor_zona
     return None
 
 def detectar_marcadores(frame_gris):
