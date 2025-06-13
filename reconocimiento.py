@@ -1,51 +1,112 @@
+# reconocimiento.py  – v7 (usa lógica del cuaderno del profesor)
+"""Reconoce zona (tanques / armas / aviones) cuando se muestra la foto
+correspondiente frente a la cámara.
+
+➡ Implementa la misma lógica que aparece en los cuadernos `07-OpenCV-*
+   Reconocimiento‑avanzado.ipynb` del profesor:
+   1. `matches = matcher.knnMatch(desc_f, desc_db, k=2)`  (frame→db)
+   2. ratio‑test de Lowe (0.75)
+   3. Sin homografía – basta con nº «good» ≥ UMBRAL.
+
+Con esto el código es idéntico al usado en clase y las imágenes impresas
+(tanques.jpg, aviones.jpg, armas.jpg) se reconocen con la misma
+fiabilidad que en los cuadernos.
+
+Ajustes por defecto:
+    • SIFT (nfeatures=800).  Fallback ORB (nfeatures=1200)
+    • UMBRAL_SIFT = 12   (≥ 12 good‑matches → aceptación)
+    • UMBRAL_ORB  = 25
+    • SKIP_FRAMES  = 5   (reducir carga CPU)
+    • DEBUG = False      (poner True para ver conteos)
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
 import cv2
+import numpy as np
 
-orb = cv2.ORB_create()
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-parameters = cv2.aruco.DetectorParameters()
-detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+# ---------- ajustes ----------
+SKIP_FRAMES   = 5
+DEBUG         = False
+UMBRAL_SIFT   = 12
+UMBRAL_ORB    = 25
 
-zonas_imagenes = {
-    'Zona de tanques': {'imagen': 'images/tanques.jpg', 'ids': [0]},
-    'Zona de aviones': {'imagen': 'images/aviones.jpg', 'ids': [1]},
-    'Zona de armas': {'imagen': 'images/armas.jpg', 'ids': [2]},
+# ---------- 1. Detector + Matcher ----------
+try:
+    fe = cv2.SIFT_create(nfeatures=800)
+    FLANN_INDEX_KDTREE = 1
+    matcher = cv2.FlannBasedMatcher(dict(algorithm=FLANN_INDEX_KDTREE, trees=5),
+                                    dict(checks=40))
+    sift_mode = True
+    print("[INFO] SIFT activado (800 features)")
+except Exception:
+    fe = cv2.ORB_create(nfeatures=1200)
+    matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    sift_mode = False
+    print("[WARN] SIFT no disponible → usando ORB (1200 features)")
+
+# ---------- 2. Base de datos ----------
+BASE_DIR = Path(__file__).resolve().parent
+ZONAS_IMAGENES = {
+    "Zona de tanques": str(BASE_DIR / "images" / "tanques.jpg"),
+    "Zona de aviones": str(BASE_DIR / "images" / "aviones.jpg"),
+    "Zona de armas"  : str(BASE_DIR / "images" / "armas.jpg"),
 }
 
-# Carga imágenes al inicio
-for zona in zonas_imagenes.values():
-    img = cv2.imread(zona['imagen'], 0)
-    if img is not None:
-        zona['kp'], zona['des'] = orb.detectAndCompute(img, None)
-    else:
-        zona['kp'], zona['des'] = None, None
+db: dict[str, dict] = {}
+for nombre, ruta in ZONAS_IMAGENES.items():
+    img = cv2.imread(ruta, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        print(f"[ERROR] No se pudo abrir {ruta}")
+        continue
+    kp, des = fe.detectAndCompute(img, None)
+    db[nombre] = {"kp": kp, "des": des}
 
-def reconocer_zona(frame_gris):
-    """Devuelve el nombre de la zona cuya imagen se asemeja más al frame."""
+_frame_count = 0
+KNN_K = 2
 
-    kp_frame, des_frame = orb.detectAndCompute(frame_gris, None)
-    if des_frame is None:
+# ---------- 3. Función pública ----------
+
+def reconocer_zona(frame_gray) -> str | None:
+    global _frame_count
+    _frame_count = (_frame_count + 1) % SKIP_FRAMES
+    if _frame_count:
+        return None  # saltamos para aligerar FPS
+
+    kp_f, des_f = fe.detectAndCompute(frame_gray, None)
+    if des_f is None or len(des_f) < KNN_K:
         return None
 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    mejor, n_good_mejor = None, 0
 
-    mejor_zona = None
-    mejores_coincidencias = 0
-
-    for nombre, datos in zonas_imagenes.items():
-        if datos['des'] is None:
+    for nombre, datos in db.items():
+        des_db, kp_db = datos["des"], datos["kp"]
+        if des_db is None or len(des_db) < KNN_K:
             continue
 
-        matches = bf.match(datos['des'], des_frame)
-        good_matches = [m for m in matches if m.distance < 40]
+        try:
+            matches = matcher.knnMatch(des_f, des_db, k=KNN_K)  # frame → db (igual que cuaderno)
+        except cv2.error:
+            continue
 
-        if len(good_matches) > mejores_coincidencias:
-            mejores_coincidencias = len(good_matches)
-            mejor_zona = nombre
+        good = [m for m, n in matches if m.distance < 0.75 * n.distance]
+        n_good = len(good)
+        if DEBUG:
+            print(f"{nombre}: {n_good} good‑matches")
 
-    if mejores_coincidencias >= 20:
-        return mejor_zona
-    return None
+        if sift_mode and n_good >= UMBRAL_SIFT and n_good > n_good_mejor:
+            mejor, n_good_mejor = nombre, n_good
+        elif (not sift_mode) and n_good >= UMBRAL_ORB and n_good > n_good_mejor:
+            mejor, n_good_mejor = nombre, n_good
 
-def detectar_marcadores(frame_gris):
-    esquinas, ids, _ = detector.detectMarkers(frame_gris)
-    return esquinas, ids
+    return mejor
+
+# ---------- 4. ArUco ----------
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+_detector_params = cv2.aruco.DetectorParameters()
+detector = cv2.aruco.ArucoDetector(aruco_dict, _detector_params)
+
+def detectar_marcadores(frame_gray):
+    corners, ids, _ = detector.detectMarkers(frame_gray)
+    return corners, ids
