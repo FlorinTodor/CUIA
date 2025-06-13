@@ -36,26 +36,42 @@ renderer = pyrender.OffscreenRenderer(640, 480)
 # ------------------------------------------------
 
 def overlay_modelo_estable(frame, esquinas, rvec, tvec, render_mesh):
-    """Renderiza el modelo 3D alineado y lo funde en la imagen."""
+    """Renderiza el modelo 3D alineado con el marcador y lo mezcla con la
+    imagen real. Transparencia correcta: el mundo real siempre se ve,
+    la geometría nunca presenta agujeros, y no pintamos un fondo negro.
+    """
     try:
+        # → Pose del modelo 3D a partir del marcador
         rot_matrix, _ = cv2.Rodrigues(rvec)
         pose = np.eye(4, dtype=np.float32)
         pose[:3, :3] = rot_matrix
         pose[:3, 3]  = tvec
 
+        # → Escena con luz y fondo transparente
         scene = pyrender.Scene(bg_color=[0, 0, 0, 0], ambient_light=[.4, .4, .4, 1])
         scene.add(render_mesh, pose=pose)
         scene.add(pyrender.DirectionalLight(color=np.ones(3), intensity=5.), pose=np.eye(4))
 
+        # → Cámara virtual con planos amplios
         cam = pyrender.IntrinsicsCamera(fx=cam_matrix[0,0], fy=cam_matrix[1,1],
-                                         cx=cam_matrix[0,2], cy=cam_matrix[1,2])
-        cam_pose = np.eye(4); cam_pose[2,3] = 0.2  # alejar cámara virtual
+                                         cx=cam_matrix[0,2], cy=cam_matrix[1,2],
+                                         znear=0.005, zfar=10.0)
+        cam_pose = np.eye(4); cam_pose[2,3] = 0.2
         scene.add(cam, pose=cam_pose)
 
-        rgba, _ = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-        alpha = np.where(np.all(rgba[:,:,:3]==0, axis=-1), 0, 255).astype(np.uint8)
-        rgba  = np.dstack((rgba[:,:,:3], alpha))
-        blended = alphaBlending(rgba, frame)
+        # → Render: obtenemos color y depth
+        color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+
+        # Garantizar 4 canales
+        if color.shape[2] == 3:
+            h, w, _ = color.shape
+            color = np.dstack((color, np.zeros((h, w), dtype=np.uint8)))
+
+        # Derivar canal alfa a partir del depth: profundidad 0 ⇒ fondo ⇒ alfa 0
+        alpha = (depth > 0).astype(np.uint8) * 255  # modelo =255, fondo =0
+        color[:, :, 3] = alpha
+
+        blended = alphaBlending(color, frame)
         return cv2.cvtColor(blended, cv2.COLOR_BGRA2BGR)
 
     except Exception:
@@ -92,7 +108,7 @@ while True:
             else:
                 marcador_visible, contador_visibilidad = marcador_actual, 1
 
-            # Zona por Id ArUco (sobre‑escribe a la de la imagen)
+            # Zona por Id ArUco
             zona_detectada = ZONA_POR_ID.get(marcador_actual, zona_detectada)
 
             # Mostrar modelo si visible varios frames
@@ -109,7 +125,7 @@ while True:
         if contador_visibilidad == 0:
             marcador_visible = None
 
-    # --------- Actualizar zona estable (si hay una propuesta) ---------
+    # --------- Actualizar zona estable ---------
     if zona_detectada:
         contador_zona[zona_detectada] = contador_zona.get(zona_detectada, 0) + 1
         if contador_zona[zona_detectada] >= UMBRAL_ESTABILIDAD:
