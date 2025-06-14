@@ -1,5 +1,6 @@
 CUIA_models/*.glb
 CUIA_models*.rar
+lib/*
 *.pkl
 cache_models/*.pkl
 stats/*.json
