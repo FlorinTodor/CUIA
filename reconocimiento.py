@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 # ---------- Parámetros globales ----------
-DEBUG           = True     # ← pon False cuando funcione
+DEBUG           = False     # ← pon False cuando funcione
 FORCE_ORB       = False    # fuerza ORB aunque SIFT esté disponible
 MIN_GOOD_SIFT   = 8        # umbral mínimo para SIFT
 MIN_GOOD_ORB    = 15       # umbral mínimo para ORB
