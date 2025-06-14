@@ -2,3 +2,5 @@ CUIA_models/*.glb
 CUIA_models*.rar
 *.pkl
 cache_models/*.pkl
+stats/*.json
+souvers/*.png

@@ -1,31 +1,33 @@
-import os, signal, sys, queue, threading, tempfile, subprocess, traceback
-os.environ["PYOPENGL_PLATFORM"] = "osmesa"    # seguimos con OSMesa
-
-# ────── 1 · Silencio total de stderr (ALSA / Jack) ────────────
-devnull = os.open(os.devnull, os.O_WRONLY)
-os.dup2(devnull, 2)        # todo lo que vaya a fd 2 se descarta
-# ──────────────────────────────────────────────────────────────
-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Museo AR – bucle principal
+  · Estadísticas únicas (persona⊗zona) con visitor_extras.stats
+  · Souvenir PNG cuando se oye «museo souvenir»
+"""
+import os, signal, sys, queue, threading, tempfile, subprocess, hashlib, time
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+os.dup2(os.open(os.devnull, os.O_WRONLY), 2)            # silenciar ALSA/Jack
 
 import cv2, numpy as np, pyrender
 from gtts import gTTS
 from cuia import alphaBlending
 from reconocimiento import reconocer_zona, detectar_marcadores
-from models import modelos_precargados
-from camera import cameraMatrix as cam_matrix, distCoeffs as dist_coeffs
+from models  import modelos_precargados
+from camera  import cameraMatrix as cam_matrix, distCoeffs as dist_coeffs
 import voice, qa
+from visitor_extras import stats, souvenir
 
-# ---------------- Configuración ----------------
+# ────────── parámetros ────────────────────────────────────────────────────
 UMBRAL_VISIBILIDAD, UMBRAL_ESTABILIDAD = 5, 10
 ZONA_POR_ID = {0:"Zona de tanques",1:"Zona de tanques",
                2:"Zona de armas", 3:"Zona de armas",
                4:"Zona de aviones",5:"Zona de aviones"}
 
-# ---------------- Hilos voz / TTS --------------
-cmd_q : queue.Queue[str] = queue.Queue()
-tts_q : queue.Queue[str] = queue.Queue()
+# ────────── voz / TTS ─────────────────────────────────────────────────────
+cmd_q, tts_q = queue.Queue(), queue.Queue()
 stop_evt = threading.Event()
-voice.start_listener(cmd_q, stop_evt)
+voice.start_listener(cmd_q, stop_evt)                  # wake-word = «museo»
 
 def _tts_worker():
     while True:
@@ -34,19 +36,28 @@ def _tts_worker():
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                 gTTS(txt, lang="es").save(f.name)
-            subprocess.run(["mpg123","-q",f.name], check=False)
+            subprocess.run(["mpg123", "-q", f.name], check=False)
         finally:
             try: os.unlink(f.name)
             except: pass
 threading.Thread(target=_tts_worker, daemon=True).start()
 
-# ---------------- Estado -----------------------
-marcador_visible, contador_vis = None, 0
-zona_estable = "Zona desconocida"
-contador_zona : dict[str,int] = {}
-renderer = None   # se creará tras abrir la cámara
+# ────────── estado de sesión ─────────────────────────────────────────────
+zona_estable          = "Zona desconocida"
+marcador_visible      = None
+contador_vis          = 0
+contador_zona         = {}
+stats_done : set[tuple[str,str]] = set()   # (hash,zona) ya enviados
 
-# ---------------- Funciones --------------------
+face_bbox        = None    # (x,y,w,h) última detección válida
+current_facehash = None    # hash de la cara actual
+FACE_TTL = 30              # frames durante los que la misma cara sigue viva
+face_ttl  = 0
+
+# ────────── OpenCV util ──────────────────────────────────────────────────
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
 def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
     try:
         pose = np.eye(4, dtype=np.float32)
@@ -55,86 +66,116 @@ def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
         scene.add(mesh, pose=pose)
         scene.add(pyrender.DirectionalLight(color=np.ones(3), intensity=5.), pose=np.eye(4))
         cam = pyrender.IntrinsicsCamera(cam_matrix[0,0], cam_matrix[1,1],
-                                        cam_matrix[0,2], cam_matrix[1,2],
-                                        znear=0.005, zfar=10.)
+                                        cam_matrix[0,2], cam_matrix[1,2], 0.005, 10)
         cam_pose = np.eye(4); cam_pose[2,3] = 0.2
         scene.add(cam, pose=cam_pose)
         color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
         if color.shape[2]==3:
             h,w,_ = color.shape
-            color = np.dstack((color, np.zeros((h,w),np.uint8)))
+            color = np.dstack((color, np.zeros((h,w), np.uint8)))
         color[:,:,3] = (depth>0).astype(np.uint8)*255
         return cv2.cvtColor(alphaBlending(color, frame), cv2.COLOR_BGRA2BGR)
-    except Exception: traceback.print_exc(); return frame
+    except Exception:
+        return frame
 
-def cerrar(sig=None, frame=None):
+# ────────── shut-down ordenado ───────────────────────────────────────────
+def cerrar(*_):
     stop_evt.set(); tts_q.put(None)
     try: cap.release()
     except: pass
-    if renderer is not None:
-        try: renderer.delete()
-        except: pass
+    try: renderer.delete()
+    except: pass
     cv2.destroyAllWindows(); sys.exit(0)
-signal.signal(signal.SIGINT, cerrar); signal.signal(signal.SIGTERM, cerrar)
+signal.signal(signal.SIGINT, cerrar)
+signal.signal(signal.SIGTERM, cerrar)
 
-# ---------------- Cámara -----------------------
+# ────────── cámara + renderer ────────────────────────────────────────────
 cap = cv2.VideoCapture(0)
+renderer = pyrender.OffscreenRenderer(640, 480)
 
-# ---------- Crear renderer OSMesa --------------
-try:
-    renderer = pyrender.OffscreenRenderer(640, 480)
-except Exception as e:
-    print("[renderer] Error creando contexto OSMesa:", e)
-    cerrar()
-# ----------------------------------------------
+# ═══════════════════  bucle principal  ═══════════════════════════════════
+while True:
+    if stop_evt.is_set(): cerrar()
+    ok, frame = cap.read()
+    if not ok: break
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-try:
-    while True:
-        if stop_evt.is_set(): cerrar()
-        ret, frame = cap.read()
-        if not ret: break
+    # 1 ◉ reconocimiento por imagen
+    zona_detectada = reconocer_zona(gray)
 
-        gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        zona_det = reconocer_zona(gris)
+    # 2 ◉ ArUco
+    esquinas, ids = detectar_marcadores(gray)
+    if ids is not None:
+        rvecs, tvecs,_ = cv2.aruco.estimatePoseSingleMarkers(
+            esquinas, 0.05, cam_matrix, distCoeffs=dist_coeffs)
+        for i, id_arr in enumerate(ids):
+            mid = int(id_arr[0])
+            contador_vis = contador_vis+1 if mid==marcador_visible else 1
+            marcador_visible = mid
+            zona_detectada = ZONA_POR_ID.get(mid, zona_detectada)
+            if contador_vis >= UMBRAL_VISIBILIDAD:
+                mesh = modelos_precargados.get(mid)
+                if mesh is not None:
+                    frame = overlay_modelo(frame, esquinas[i], rvecs[i], tvecs[i], mesh)
+                    cv2.polylines(frame,[esquinas[i].astype(int)],True,(0,255,0),2)
+    else:
+        contador_vis = max(0, contador_vis-1)
+        if contador_vis==0: marcador_visible=None
 
-        esquinas, ids = detectar_marcadores(gris)
-        if ids is not None:
-            rvecs,tvecs,_ = cv2.aruco.estimatePoseSingleMarkers(
-                esquinas,0.05,cam_matrix,distCoeffs=dist_coeffs)
-            for i,id_arr in enumerate(ids):
-                mid = int(id_arr[0])
-                contador_vis = contador_vis+1 if mid==marcador_visible else 1
-                marcador_visible = mid
-                zona_det = ZONA_POR_ID.get(mid, zona_det)
-
-                if contador_vis >= UMBRAL_VISIBILIDAD:
-                    mesh = modelos_precargados.get(mid)
-                    if mesh is not None:
-                        frame = overlay_modelo(frame,esquinas[i],rvecs[i],tvecs[i],mesh)
-                        cv2.polylines(frame,[esquinas[i].astype(int)],True,(0,255,0),2)
-                        cv2.putText(frame,f"Marcador {mid}",tuple(esquinas[i][0][0].astype(int)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,0.5,(255,0,0),2)
+    # 3 ◉ detección facial
+    if face_ttl > 0: face_ttl -= 1
+    faces = face_cascade.detectMultiScale(gray, 1.2, 5)
+    if len(faces):
+        x,y,w,h = faces[0]
+        face_bbox = (x,y,w,h)
+        face_roi  = frame[y:y+h, x:x+w]
+        # nuevo hash si la cara cambió significativamente
+        new_hash = hashlib.sha1(cv2.resize(face_roi,(32,32)).tobytes()).hexdigest()
+        if new_hash != current_facehash:
+            current_facehash = new_hash
+            face_ttl = FACE_TTL             # reinicia vida
         else:
-            contador_vis = max(0, contador_vis-1)
-            if contador_vis==0: marcador_visible=None
+            face_ttl = min(FACE_TTL, face_ttl+1)  # “refresca” mientras la ve
 
-        if zona_det:
-            c = contador_zona.get(zona_det,0)+1
-            contador_zona[zona_det]=c
-            if c>=UMBRAL_ESTABILIDAD:
-                zona_estable=zona_det; contador_zona={zona_estable:c}
-        else:
-            for z in list(contador_zona): contador_zona[z]=max(0,contador_zona[z]-1)
+        if zona_estable != "Zona desconocida":
+            key = (current_facehash, zona_estable)
+            if key not in stats_done:
+                stats.update(face_roi, zona_estable)
+                stats_done.add(key)
+       ## cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,255),1)
 
-        while not cmd_q.empty():
-            q = cmd_q.get()
-            if q=="__AWOKEN__": tts_q.put("Te escucho"); continue
-            ans = qa.responder(q, marcador_visible, zona_estable)
-            tts_q.put(ans if ans else "Lo siento, no tengo respuesta para eso.")
+    # 4 ◉ estabilizar zona
+    if zona_detectada:
+        c = contador_zona.get(zona_detectada,0)+1
+        contador_zona[zona_detectada]=c
+        if c >= UMBRAL_ESTABILIDAD:
+            zona_estable = zona_detectada
+            contador_zona = {zona_estable:c}
+    else:
+        for z in list(contador_zona):
+            contador_zona[z] = max(0, contador_zona[z]-1)
 
-        cv2.putText(frame,f"Te encuentras en: {zona_estable}",(10,30),
-                    cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,255),2)
-        cv2.imshow("Museo AR",frame)
-        if cv2.waitKey(1)&0xFF==ord('q'): break
-finally:
-    cerrar()
+    # 5 ◉ comandos de voz
+    while not cmd_q.empty():
+        q = cmd_q.get().strip().lower()
+        if q == "__awoken__":
+            tts_q.put("Te escucho"); continue
+        if q == "souvenir":
+            if face_bbox and face_ttl>0:
+                souvenir.request(frame, face_bbox, zona_estable)
+                tts_q.put("Souvenir guardado")
+            else:
+                tts_q.put("Necesito ver tu cara para el souvenir")
+            continue
+        # otras preguntas
+        respuesta = qa.responder(q, marcador_visible, zona_estable)
+        tts_q.put(respuesta if respuesta else "Lo siento, no tengo respuesta para eso.")
+
+    # 6 ◉ HUD
+    cv2.putText(frame, f"Te encuentras en: {zona_estable}", (10,30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+    cv2.imshow("Museo AR", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cerrar()
