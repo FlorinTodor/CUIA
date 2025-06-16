@@ -1,35 +1,57 @@
-# reconocimiento.py  – v8 (debug detallado + umbral adaptable)
-"""Reconoce zona (tanques / armas / aviones) comparando la imagen captada con
-las fotos de referencia.
+# reconocimiento.py  – v9 (verificación geométrica + umbral adaptativo)
+"""Reconoce la *zona* (tanques / armas / aviones) comparando el fotograma
+con las imágenes de referencia.
 
-▶ NOTAS IMPORTANTE PARA DEPURAR
-1. Activa `DEBUG=True` y mira la terminal: se imprimen nº de keypoints, matches,
-   good matches y si supera o no el umbral.
-2. Si tu impresora / móvil produce pocas coincidencias, puedes bajar
-   `MIN_GOOD_SIFT` y `MIN_GOOD_ORB` en tiempo real.
-3. Se puede cambiar el detector a ORB manualmente poniendo
-   `FORCE_ORB = True`.
+Mejoras frente a v8
+───────────────────
+1. **Verificación geométrica (Homografía + RANSAC)** – solo se acepta una zona
+   si, además de superar el umbral de *good matches*, al estimar una homografía
+   salen suficientes inliers. Esto evita falsos positivos cuando aparecen
+   caras, paredes o fotos parcialmente parecidas.
+2. **Umbral adaptativo** – `MIN_GOOD_SIFT/ORB` siguen siendo mínimos, pero si el
+   número de *good matches* es muy alto se pide también un ratio mínimo de
+   *inliers/ good matches* para asegurar coherencia.
+3. **Parámetros centralizados** al inicio para que puedas afinarlos en caliente
+   si tus impresiones no coinciden con los valores por defecto.
+4. Mensajes de *debug* más claros (`DEBUG=True`).
+
+Uso:
+-----
+```python
+from reconocimiento import reconocer_zona, detectar_marcadores
+zona = reconocer_zona(frame_gray)
+```
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
 import cv2
 import numpy as np
+from pathlib import Path
+import os
 
-# ---------- Parámetros globales ----------
-DEBUG           = False     # ← pon False cuando funcione
-FORCE_ORB       = False    # fuerza ORB aunque SIFT esté disponible
-MIN_GOOD_SIFT   = 8        # umbral mínimo para SIFT
-MIN_GOOD_ORB    = 15       # umbral mínimo para ORB
+# ═════════════════════  Parámetros globales  ════════════════════════
+DEBUG            = False     # ← pon True para ver detalles en consola
+FORCE_ORB        = False     # fuerza ORB aunque SIFT esté disponible
 
-# ---------- Inicializar detector y matcher ----------
+# 1) Coincidencias "buenas" mínimas para considerar la zona
+MIN_GOOD_SIFT    = 12        # antes 8 → más estricto
+MIN_GOOD_ORB     = 25        # antes 15
+
+# 2) Inliers (RANSAC) – validación geométrica -----------------------
+MIN_INLIERS_SIFT = 8         # nº mínimo de inliers para SIFT
+MIN_INLIERS_ORB  = 15        # idem ORB
+RATIO_INLIERS    = 0.5       # inliers deben ser al menos 50 % de good matches
+
+# 3) Lowe ratio ------------------------------------------------------
+LOWE_RATIO       = 0.75
+
+# ════════════════════  Inicializar detector + matcher  ══════════════
 if not FORCE_ORB:
     try:
-        fe = cv2.SIFT_create(nfeatures=800)
+        fe = cv2.SIFT_create(nfeatures=1000)
         FLANN_INDEX_KDTREE = 1
-        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-        search_params = dict(checks=50)
+        index_params  = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=60)
         matcher = cv2.FlannBasedMatcher(index_params, search_params)
         sift_mode = True
         if DEBUG:
@@ -42,12 +64,12 @@ else:
     sift_mode = False
 
 if not sift_mode:
-    fe = cv2.ORB_create(nfeatures=1500)
+    fe = cv2.ORB_create(nfeatures=2000)
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
     if DEBUG and FORCE_ORB:
         print("[INFO] ORB forzado por configuración")
 
-# ---------- Cargar imágenes de referencia ----------
+# ════════════════════  Cargar imágenes de referencia  ═══════════════
 zona_dir = Path(__file__).parent / "images"
 zonas_imagenes = {
     "Zona de tanques":  zona_dir / "tanques.jpg",
@@ -67,10 +89,33 @@ for nombre, ruta in zonas_imagenes.items():
     if DEBUG:
         print(f"[INIT] {nombre}: {len(kp)} keypoints")
 
-# ---------- API pública ----------
+# ══════════════════════  Funciones auxiliares  ═════════════════════
+
+def _good_matches(des_f, des_db):
+    """Devuelve lista de *good matches* tras el Lowe‑ratio test."""
+    try:
+        matches = matcher.knnMatch(des_f, des_db, k=2)
+    except cv2.error:
+        return []
+    good = [m for m, n in matches if m.distance < LOWE_RATIO * n.distance]
+    return good
+
+
+def _validate_homography(kp_f, kp_db, good):
+    """Homografía + RANSAC. Devuelve nº de inliers."""
+    if len(good) < 4:
+        return 0
+    src_pts = np.float32([kp_f[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp_db[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    if H is None or mask is None:
+        return 0
+    return int(mask.sum())
+
+# ═══════════════════════  API pública  ═════════════════════════════
 
 def reconocer_zona(frame_gray: np.ndarray) -> str | None:
-    """Devuelve nombre de la zona o None si no supera el umbral."""
+    """Devuelve nombre de la zona o **None** si no supera los umbrales."""
     kp_f, des_f = fe.detectAndCompute(frame_gray, None)
     if des_f is None:
         if DEBUG:
@@ -78,50 +123,57 @@ def reconocer_zona(frame_gray: np.ndarray) -> str | None:
         return None
 
     mejor_zona: str | None = None
-    mejor_good: int = 0
+    mejor_score: tuple[int, int] = (0, 0)  # (good, inliers)
 
     for zona, datos in db.items():
         des_db = datos["des"]
+        kp_db  = datos["kp"]
         if des_db is None:
             continue
 
-        # Dirección frame→db (como en cuaderno del profesor)
-        try:
-            matches = matcher.knnMatch(des_f, des_db, k=2)
-        except cv2.error as e:
+        good = _good_matches(des_f, des_db)
+        ngood = len(good)
+
+        if ngood == 0:
             if DEBUG:
-                print("[DEBUG] knnMatch error:", e)
+                print(f"[DEBUG] {zona}: 0 good matches")
             continue
 
-        # Lowe ratio test
-        good = []
-        for m, n in matches:
-            if m.distance < 0.75 * n.distance:
-                good.append(m)
+        inliers = _validate_homography(kp_f, kp_db, good)
 
-        ngood = len(good)
         if DEBUG:
-            print(f"[DEBUG] {zona}: keyF={len(kp_f):3d}  matches={len(matches):3d}  good={ngood:3d}")
+            print(f"[DEBUG] {zona}: good={ngood:3d}, inliers={inliers:3d}")
 
-        if ngood > mejor_good:
-            mejor_good = ngood
+        # escoger la zona con más *inliers* (primario) y luego más *good*
+        if inliers > mejor_score[1] or (inliers == mejor_score[1] and ngood > mejor_score[0]):
+            mejor_score = (ngood, inliers)
             mejor_zona = zona
 
-    # ¿supera umbral?
-    umbral = MIN_GOOD_SIFT if sift_mode else MIN_GOOD_ORB
-    if mejor_good >= umbral:
-        if DEBUG:
-            print(f"[INFO] Zona detectada → {mejor_zona}  (good={mejor_good})")
-        return mejor_zona
-    else:
+    if mejor_zona is None:
         return None
 
+    ngood, inliers = mejor_score
+    if sift_mode:
+        if ngood < MIN_GOOD_SIFT or inliers < MIN_INLIERS_SIFT:
+            return None
+    else:
+        if ngood < MIN_GOOD_ORB or inliers < MIN_INLIERS_ORB:
+            return None
 
-# ---------- Detección ArUco (sin cambios) ----------
+    # razón inliers / good
+    if inliers / ngood < RATIO_INLIERS:
+        return None
+
+    if DEBUG:
+        print(f"[INFO] Zona detectada → {mejor_zona}  (good={ngood}, inliers={inliers})")
+    return mejor_zona
+
+# ════════════════  Detección ArUco (sin cambios)  ═════════════════=
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-detector   = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
+aruco_params = cv2.aruco.DetectorParameters()
+detector   = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
 def detectar_marcadores(frame_gray: np.ndarray):
-    """Wrapper para que museo_ar.py reciba (esquinas, ids)."""
+    """Wrapper para que *museo_ar.py* reciba (esquinas, ids)."""
     corners, ids, _ = detector.detectMarkers(frame_gray)
     return corners, ids
