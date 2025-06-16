@@ -9,7 +9,14 @@ Museo AR – bucle principal
 
 import os, signal, sys, queue, threading, tempfile, subprocess, hashlib, time
 os.environ["PYOPENGL_PLATFORM"] = "osmesa"         # pyrender off-screen
+# Evitar mensajes de TensorFlow y Deep Face
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"          # 0=TODO · 1=INFO · 2=WARNING · 3=ERROR
 
+# ── SILENCIAR COMPLETAMENTE STDERR DESDE ESTE PUNTO ──────────────────────
+DEVNULL_FD = os.open(os.devnull, os.O_WRONLY)
+os.dup2(DEVNULL_FD, 2)        # todo lo que vaya a stderr se descarta
+
+import logging; logging.getLogger("absl").setLevel(logging.ERROR)
 import cv2, numpy as np, pyrender
 from gtts import gTTS
 from cuia          import alphaBlending
@@ -17,7 +24,9 @@ from reconocimiento import reconocer_zona, detectar_marcadores
 from models        import modelos_precargados
 from camera        import cameraMatrix as cam_matrix, distCoeffs as dist_coeffs
 import voice, qa
-from visitor_extras import souvenir        #  ← solo esto queda de visitor_extras
+from visitor_extras import souvenir  
+
+
 
 # ────────── parámetros ──────────────────────────────────────────────
 UMBRAL_VISIBILIDAD, UMBRAL_ESTABILIDAD = 5, 10
@@ -126,6 +135,7 @@ while True:
         )
         for i, id_arr in enumerate(ids):
             mid           = int(id_arr[0])
+            #print("ID ArUco detectado:", mid) # debug
             contador_vis  = contador_vis + 1 if mid == marcador_visible else 1
             marcador_visible = mid
             zona_detectada  = ZONA_POR_ID.get(mid, zona_detectada)

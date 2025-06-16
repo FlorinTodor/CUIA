@@ -96,7 +96,7 @@ class _SouvenirMaker:
             frame[y:y+h,x:x+w]=original[y:y+h,x:x+w]
         if SHOW_BBOX:
             cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,255),2)
-        cv2.putText(frame,f"{zona} - Souvenir", (10,frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,255),2)
+        cv2.putText(frame,"Museo AR - Souvenir", (10,frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,255),2)
         out=_SOUV_DIR / f"souvenir_{_dt.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.png"
         cv2.imwrite(str(out),frame)
         print(f"[Souvenir] guardado en {out}")
