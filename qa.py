@@ -1,88 +1,114 @@
-"""qa.py – Lógica de preguntas y respuestas para el Museo AR.
+# ============================  qa.py  ============================
+"""qa.py – Preguntas y respuestas para el Museo AR.
 
-Se apoya en:
-    • voice.py  – escucha micrófono y mete las preguntas en una cola.
-    • Este módulo  – parsea la pregunta y devuelve la respuesta.
+Uso rápido (en tu main loop):
 
-Cómo usar (ejemplo minimal en main loop):
+```python
+import queue, threading, voice, qa
+cmd_q   = queue.Queue()
+stop_ev = threading.Event()
+voice.start_listener(cmd_q, stop_ev)  # ← arranca el micro
 
-    import queue, threading, qa, voice
-    cmd_q = queue.Queue()
-    stop_evt = threading.Event()
-    voice.start_listener(cmd_q, stop_evt)
+while True:
+    while not cmd_q.empty():
+        pregunta = cmd_q.get()
+        resp = qa.responder(pregunta, marcador_actual, zona_estable)
+        qa.decir(resp)
+```
 
-    while True:
-        # ... resto del bucle cámara ...
-        while not cmd_q.empty():
-            pregunta = cmd_q.get()
-            respuesta = qa.responder(pregunta, marcador_actual, zona_estable)
-            qa.decir(respuesta)  # audio + print
+Cambios vs. tu versión original
+──────────────────────────────
+• Sintaxis f‑string corregida en la respuesta del *año*.
+• Tabla de sinónimos y expresiones para mejorar la comprensión sin meter
+  modelos externos.
+• Añadido soporte para preguntas directas sin “museo” delante (ya filtrado
+  en *voice.py*).
 """
-
+from __future__ import annotations
+import re, pyttsx3
 from num2words import num2words
 
-import re, pyttsx3
-
-# ---------------- Base de conocimiento ----------------
-
+# ---------------- Base de conocimiento ---------------------------
 INFO_MARKER = {
-    0: dict(nombre="Panzerkampfwagen VI Tiger I", tipo="tanque pesado", año=1942, bando="Alemania nazi"),
-    1: dict(nombre="Consolidated B‑24 Liberator", tipo="bombardero pesado", año=1941, bando="Estados Unidos"),
-    2: dict(nombre="MP‑40", tipo="subfusil", año=1940, bando="Alemania nazi"),
-    3: dict(nombre="Arma desconocida", tipo="arma", año=None, bando="Desconocido"),
-    4: dict(nombre="Vehículo desconocido", tipo="avión", año=None, bando="Desconocido"),
-    5: dict(nombre="Vehículo desconocido", tipo="avión", año=None, bando="Desconocido"),
+    0: dict(nombre="Panzerkampfwagen VI Tiger I",   tipo="tanque pesado",    año=1942, bando="Alemania nazi"),
+    1: dict(nombre="Consolidated B‑24 Liberator",   tipo="bombardero pesado", año=1941, bando="Estados Unidos"),
+    2: dict(nombre="MP‑40",                         tipo="subfusil",         año=1940, bando="Alemania nazi"),
+    3: dict(nombre="Arma desconocida",              tipo="arma",             año=None, bando="Desconocido"),
+    4: dict(nombre="Vehículo desconocido",          tipo="avión",            año=None, bando="Desconocido"),
+    5: dict(nombre="Vehículo desconocido",          tipo="avión",            año=None, bando="Desconocido"),
 }
 
-# ---------------- TTS inicialización ------------------
+# ---------------- Motor TTS (pyttsx3 – offline) ------------------
 _engine: pyttsx3.Engine | None = None
 
 def _tts():
     global _engine
     if _engine is None:
         _engine = pyttsx3.init()
-        _engine.setProperty('rate', 165)
+        _engine.setProperty("rate", 165)
     return _engine
 
-# ---------------- Funciones públicas -----------------
+# ---------------- Utilidad de matching ---------------------------
+# Pequeña tabla de regex → lambda que genera respuesta
+_QA_PATTERNS: list[tuple[re.Pattern[str], callable[..., str]]] = []
+
+def _qa(pattern: str):
+    """Decorator: añade la función a la tabla de respuestas."""
+    def _wrap(func):
+        _QA_PATTERNS.append((re.compile(pattern, re.I | re.S), func))
+        return func
+    return _wrap
+
+# ---- 1) ¿En qué zona estoy? ------------------------------------
+@_qa(r"\b(zona|sitio|lugar).*(estoy|encuentro)\b")
+def _zona(_, __, ___, zona):
+    return f"Te encuentras en {zona or 'una zona desconocida'}."
+
+# ---- 2) ¿Qué objeto veo? ---------------------------------------
+@_qa(r"\b(qué|cuál).*(arma|objeto|modelo).*(veo|viendo)\b")
+def _objeto(_, marcador, *__):
+    info = INFO_MARKER.get(marcador or -1)
+    if info:
+        return f"Estás viendo {info['nombre']}, un {info['tipo']}."
+    return "No estoy seguro del objeto que estás viendo."
+
+# ---- 3) Año de fabricación -------------------------------------
+@_qa(r"\b(año|cuándo|introduj[oó]).*(fabricó|construyó|creó)\b")
+def _anyo(_, marcador, *__):
+    info = INFO_MARKER.get(marcador or -1)
+    if info and info["año"]:
+        year_words = num2words(info["año"], lang="es")
+        return f"{info['nombre']} se introdujo en el año {year_words}."
+    return "No dispongo del año exacto de creación de este modelo."
+
+# ---- 4) Bando/origen -------------------------------------------
+@_qa(r"\b(bando|origen|quién lo.*us[óa]?)\b")
+def _bando(_, marcador, *__):
+    info = INFO_MARKER.get(marcador or -1)
+    if info and info["bando"]:
+        return f"Pertenecía al bando de {info['bando']}."
+    return "No tengo ese dato."
+
+# ---- fallback ---------------------------------------------------
+@_qa(r".*")
+def _fallback(*_):
+    return "No he entendido la pregunta. ¿Puedes reformularla, por favor?"
+
+# ---------------- API pública -----------------------------------
 
 def responder(pregunta: str, marcador: int | None, zona: str | None) -> str:
-    """Devuelve la respuesta en texto (ES).  No lanza excepciones."""
-    pregunta = pregunta.lower()
-
-    # 1) Pregunta por zona
-    if re.search(r"(qué|cuál).*(zona|sitio|lugar).* (estoy|encuentro)", pregunta):
-        return f"Te encuentras en {zona or 'una zona desconocida'}."
-
-    # 2) Pregunta por arma/objeto actual
-    if re.search(r"(qué|cuál).*(arma|objeto|modelo).* (veo|estoy viendo)", pregunta):
-        info = INFO_MARKER.get(marcador)
-        if info:
-            return f"Estás viendo {info['nombre']}, un {info['tipo']}."
-        return "No estoy seguro del objeto que estás viendo."
-
-    # 3) Pregunta por año
-    if re.search(r"(en.*qué año|cuándo|de qué año).*(creó|fabricó|construyó)", pregunta):
-        info = INFO_MARKER.get(marcador)
-        if info and info['año']:
-            return f"{info['nombre']} se introdujo en el año {num2words(info["año"], lang="es")}."
-        return "No dispongo del año exacto de creación de este modelo."
-
-    # 4) Pregunta por bando/origen
-    if re.search(r"(de qué bando|quién lo.*us(ó|aba)|origen)", pregunta):
-        info = INFO_MARKER.get(marcador)
-        if info and info['bando']:
-            return f"Pertenecía al bando de {info['bando']}."
-        return "No tengo ese dato."
-
-    return "No he entendido la pregunta. Puedes reformularla, por favor?"
+    pregunta = pregunta.strip().lower()
+    for pattern, func in _QA_PATTERNS:
+        if pattern.search(pregunta):
+            return func(pregunta, marcador, zona, zona)  # algunos callbacks no usan todos
+    return _fallback()
 
 
 def decir(respuesta: str):
-    """Reproduce la respuesta por voz y también la imprime."""
     print("[IA]", respuesta)
     try:
-        _tts().say(respuesta)
-        _tts().runAndWait()
+        eng = _tts()
+        eng.say(respuesta)
+        eng.runAndWait()
     except Exception:
         pass

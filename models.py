@@ -20,7 +20,7 @@ models.py  – versión robusta
 # CONFIGURACIÓN ----------------------------------------------------------------
 MODELOS: Dict[int, str] = {
     0: "CUIA_models/pzkpfw_vi_tiger_1.glb",        # tanque Tiger I
-    1: "CUIA_models/consolidated_b-24_liberator.glb",  # bombardero B‑24
+    1: "CUIA_models/supermarine_spitfire.glb",  # bombardero B‑24
     2: "CUIA_models/mp_40_submachine_gun.glb",     # MP‑40
     # Añade más pares {id: ruta} si fuera necesario
 }
