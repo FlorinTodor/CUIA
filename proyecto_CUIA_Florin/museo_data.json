@@ -1,0 +1,63 @@
+{
+  "model_paths": {
+    "0": "CUIA_models/pzkpfw_vi_tiger_1.glb",
+    "1": "CUIA_models/supermarine_spitfire.glb",
+    "2": "CUIA_models/consolidated_b-24_liberator.glb",
+    "3": "CUIA_models/mp_40_submachine_gun.glb",
+    "4": "CUIA_models/lewis_mk1.glb",
+    "5": "CUIA_models/mg42.glb",
+    "6": "CUIA_models/german_m24_stielhandgranate.glb",
+    "7": "CUIA_models/mosin_nagant_m9130.glb"
+  },
+
+  "knowledge": {
+    "0": {
+      "nombre": "Panzerkampfwagen VI Tiger I",
+      "tipo":   "tanque pesado",
+      "año":    1942,
+      "bando":  "Alemania (Eje)"
+    },
+    "1": {
+      "nombre": "Supermarine Spitfire",
+      "tipo":   "caza",
+      "año":    1938,
+      "bando":  "Reino Unido (Aliados)"
+    },
+    "2": {
+      "nombre": "Consolidated B-24 Liberator",
+      "tipo":   "bombardero pesado",
+      "año":    1941,
+      "bando":  "Estados Unidos (Aliados)"
+    },
+    "3": {
+      "nombre": "MP-40",
+      "tipo":   "subfusil",
+      "año":    1940,
+      "bando":  "Alemania (Eje)"
+    },
+    "4": {
+      "nombre": "Lewis Mk I",
+      "tipo":   "ametralladora ligera",
+      "año":    1914,
+      "bando":  "Reino Unido (Aliados)"
+    },
+    "5": {
+      "nombre": "MG 42",
+      "tipo":   "ametralladora general",
+      "año":    1942,
+      "bando":  "Alemania (Eje)"
+    },
+    "6": {
+      "nombre": "M24 Stielhandgranate",
+      "tipo":   "granada de mano",
+      "año":    1924,
+      "bando":  "Alemania (Eje)"
+    },
+    "7": {
+      "nombre": "Mosin-Nagant M91/30",
+      "tipo":   "fusil de cerrojo",
+      "año":    1930,
+      "bando":  "Unión Soviética (Aliados)"
+    }
+  }
+}
