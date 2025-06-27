@@ -27,15 +27,15 @@ import voice, qa
 from visitor_extras import souvenir  
 import contextlib
 import cuia
-
-
+import json
+with open("museo_data.json", encoding="utf-8") as f:
+    _DATA  = json.load(f)
+    
+ZONA_POR_ID: dict[int, str] = {int(k): v for k, v in _DATA["zonas_por_id"].items()}
 
 # ────────── parámetros ──────────────────────────────────────────────
 UMBRAL_VISIBILIDAD, UMBRAL_ESTABILIDAD = 5, 10
-ZONA_POR_ID = {0: "Zona de tanques", 1: "Zona de aviones",
-               2: "Zona de aviones",   3: "Zona de armas",
-               4: "Zona de armas", 5: "Zona de armas",
-               6: "Zona de armas", 7: "Zona de armas",}
+
 
 # ────────── voz / TTS ───────────────────────────────────────────────
 cmd_q, tts_q = queue.Queue(), queue.Queue()

@@ -10,6 +10,17 @@
     "7": "CUIA_models/mosin_nagant_m9130.glb"
   },
 
+  "zonas_por_id":{
+    "0" : "Zona de tanques",
+    "1" : "Zona de aviones", 
+    "2" : "Zona de aviones",
+    "3" : "Zona de armas",
+    "4" : "Zona de armas",
+    "5" : "Zona de armas",
+    "6" : "Zona de armas",
+    "7" : "Zona de armas"
+    },
+    
   "knowledge": {
     "0": {
       "nombre": "Panzerkampfwagen VI Tiger I",

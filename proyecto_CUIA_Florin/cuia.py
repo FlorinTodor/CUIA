@@ -4,6 +4,10 @@ import matplotlib as mpl
 from matplotlib import pyplot as plt
 import time
 import os
+from wgpu.gui.offscreen import WgpuCanvas # Para el render offscreen
+import pygfx as gfx
+import pylinalg as la # Álgebra lineal para las transformaciones geométricas
+
 
 def popup(titulo, imagen):
     cv2.imshow(titulo, imagen)
@@ -117,7 +121,7 @@ class myVideo:
 
                 ret, frame = self._cap.read()
                 if ret:
-                    self._currentFrame = framecv2.cvtColor(fg, cv2.COLOR_GRAY2BGRA)
+                    self._currentFrame = cv2.cvtColor(fg, cv2.COLOR_GRAY2BGRA)
                     self._nextFrame = correctFrame + 1
                     if self.loop:
                         self._nextFrame = self._nextFrame % self._numFrames
@@ -199,7 +203,15 @@ def alphaBlending(fg, bg, x=0, y=0):
     res[:, :, 3] = np.uint8(a0[:, :, 0] * 255.0)
 
     return res
-
+# ── FOV a partir de la matriz de cámara de OpenCV ─────────────────────────
+def fov(K, w, h):
+    fx, fy = K[0, 0], K[1, 1]
+    if w >= h:
+        return np.degrees(2 * np.arctan(h / (2 * fy)))
+    else:
+        return np.degrees(2 * np.arctan(w / (2 * fx)))
+    
+    
 def proyeccion(puntos, rvec, tvec, cameraMatrix, distCoeffs):
     if isinstance(puntos, list):
         return(proyeccion(np.array(puntos, dtype=np.float32), rvec, tvec, cameraMatrix, distCoeffs))
@@ -235,3 +247,209 @@ def histogramahsv(imagen, solotono=True):
         ax3.get_yaxis().set_visible(False)
         ax3.plot(histov)
     plt.show()
+
+class matrizDeTransformacion:
+    def __init__(self, matrix=None):
+        # Inicializa la matriz como una identidad 4x4 si no se especifica ninguna
+        self.matrix = matrix if matrix is not None else np.eye(4)
+
+    @staticmethod
+    def traslacion(tx, ty, tz):
+        mat = np.eye(4)
+        mat[:3, 3] = [tx, ty, tz]
+        return matrizDeTransformacion(mat)
+
+    @staticmethod
+    def rotacion(axis, angulo):
+        mat = np.eye(4)
+        c, s = np.cos(angulo), np.sin(angulo)
+
+        if axis == 'x':
+            mat[:3, :3] = [[1, 0, 0],
+                           [0, c, -s],
+                           [0, s, c]]
+        elif axis == 'y':
+            mat[:3, :3] = [[c, 0, s],
+                           [0, 1, 0],
+                           [-s, 0, c]]
+        elif axis == 'z':
+            mat[:3, :3] = [[c, -s, 0],
+                           [s, c, 0],
+                           [0, 0, 1]]
+        else:
+            raise ValueError("El eje debe ser 'x', 'y' o 'z'.")
+        
+        return matrizDeTransformacion(mat)
+
+    @staticmethod
+    def escalado(sx=1, sy=1, sz=1):
+        mat = np.eye(4)
+        mat[0, 0] = sx
+        mat[1, 1] = sy
+        mat[2, 2] = sz
+        return matrizDeTransformacion(mat)
+
+    @staticmethod
+    def rotacion_con_cuaternion(q):
+        x, y, z, w = q
+
+        # Normaliza el cuaternión
+        norm = np.sqrt(x**2 + y**2 + z**2 + w**2)
+        x, y, z, w = x / norm, y / norm, z / norm, w / norm
+
+        # Calcula la matriz de rotación 3x3
+        matriz_rotacion = np.array([
+            [1 - 2*(y**2 + z**2), 2*(x*y - z*w), 2*(x*z + y*w)],
+            [2*(x*y + z*w), 1 - 2*(x**2 + z**2), 2*(y*z - x*w)],
+            [2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x**2 + y**2)]
+        ])
+
+        # Convierte a matriz homogénea
+        matriz = np.eye(4)
+        matriz[:3, :3] = matriz_rotacion
+
+        return matrizDeTransformacion(matriz)
+    
+    def __matmul__(self, other):
+        # Operador @ para la composición de matrices.
+        if not isinstance(other, matrizDeTransformacion):
+            raise TypeError("El operador solo puede aplicarse entre instancias de matrizDeTransformacion.")
+        return matrizDeTransformacion(np.matmul(self.matrix, other.matrix))
+
+    def __array__(self):
+        # Convierte la instancia a un np.array.
+        return self.matrix
+
+    @property
+    def shape(self):
+        return(self.matrix.shape)
+    
+    def __repr__(self):
+        return f"matrizDeTransformacion(\n{self.matrix}\n)"
+
+
+
+
+class modeloGLTF:
+    def __init__(self, ruta_modelo=None):
+        self.model_obj = None  
+        self.gltf = None
+        self.current_action = None
+        if ruta_modelo:
+            self.cargar(ruta_modelo)
+        self.indice_animacion = None
+        self.skeleton_helper = None
+
+    def cargar(self, ruta_modelo):
+        if self.model_obj:
+            self.model_obj.remove()
+        self.gltf = gfx.load_gltf(ruta_modelo)
+        self.seleccionar_escena() # Selecciona la escena por defecto dentro del modelo GLTF
+        self.skeleton_helper = gfx.SkeletonHelper(self.model_obj)
+        self.skeleton_helper.visible = False
+
+    def seleccionar_escena(self, indice=None):
+        if self.gltf:
+            if indice is None:
+                if self.gltf.scene is not None:
+                    self.model_obj = self.gltf.scene
+                else:
+                    self.model_obj = self.gltf.scenes[0]
+            elif indice >= 0 and indice < len(self.gltf.scenes):
+                self.model_obj = self.gltf.scenes[indice]
+            else:
+                raise ValueError("Índice de escena fuera de rango")
+        else:
+            raise ValueError("No hay modelo GLTF cargado")
+
+    def escalar(self, escala):
+        if isinstance(escala, tuple):
+            self.model_obj.local.scale = (escala[0], escala[1], escala[2])
+        else:
+            # Si solo se indica un número se hace un escalado unidorme
+            self.model_obj.local.scale = (escala, escala, escala)
+
+    def rotar(self, rotacion):
+        q = la.quat_from_euler(rotacion)
+        self.model_obj.local.rotation = la.quat_mul(q, self.model_obj.local.rotation)
+
+    def trasladar(self, posicion):
+        self.model_obj.local.position = posicion
+
+    def flotar(self):
+        deltaZ = -self.model_obj.get_world_bounding_box()[0][2]
+        pos = np.array(self.model_obj.local.position)
+        pos[2] += deltaZ
+        self.trasladar(pos)
+
+    def animaciones(self):
+        if not self.gltf or not self.gltf.animations:
+            return []
+        nombres = []
+        for i, animation in enumerate(self.gltf.animations):
+            nombre = animation.name if animation.name else f"Anim_{i}"
+            nombres.append(nombre)
+            
+        return nombres
+
+    def animar(self, nombre):
+        if not self.gltf or not self.gltf.animations:
+            return False
+
+        for i, animation in enumerate(self.gltf.animations):
+            nombre_animacion = animation.name if animation.name else f"Anim_{i}"
+            if nombre_animacion == nombre:
+                self.indice_animacion = i
+                self.current_action = animation  # Guardar la animación actual
+                return True
+        
+        return False
+
+class escenaPYGFX:
+    def __init__(self, fov, ancho, alto):
+        self.mixer = gfx.AnimationMixer()
+        self.clock = gfx.Clock()
+        self.scene = gfx.Scene()
+        self.scene.background = None  # Fondo transparente    
+        self.canvas = WgpuCanvas(size=(ancho, alto))
+        self.renderer = gfx.WgpuRenderer(self.canvas)
+        self.camera = gfx.PerspectiveCamera(fov, aspect=ancho/alto, width=ancho, height=alto, depth_range=(0.1, 1000))
+
+    def iluminar(self, intensidad=1.0):
+        ambient_light = gfx.AmbientLight(intensidad)
+        self.scene.add(ambient_light)
+        
+    def agregar_modelo(self, modelo):
+        skeleton_helper = gfx.SkeletonHelper(modelo.model_obj)
+        skeleton_helper.visible = False
+        self.scene.add(skeleton_helper)
+        self.scene.add(modelo.model_obj)
+        if modelo.indice_animacion is not None:  # Cambiar la condición
+            action = self.mixer.clip_action(modelo.current_action)  # Usar la animación guardada
+            action.play()
+            self.mixer.update(0.0)
+
+    def ilumina_modelo(self, modelo, intensidad=0.5):
+        radio = modelo.model_obj.get_world_bounding_sphere()[3]
+        posicion = modelo.model_obj.local.position
+        luces = [(1, 1, 1), (1, -1, 1), (-1, 1, 1), (-1, -1, 1), (1, 1, -1), (1, -1, -1), (-1, 1, -1), (-1, -1, -1)]
+        for posluz in luces:
+            light = gfx.DirectionalLight(color=(1, 1, 1), intensity=intensidad)
+            pos = np.sum([[posicion], [posluz]], axis=0)
+            pos = pos / np.linalg.norm(pos) * 2 * radio
+            light.local.position = pos
+            light.look_at(posicion)
+            self.scene.add(light)
+
+    def actualizar_camara(self, matriz):
+        self.camera.local.matrix = matriz
+
+    def mostrar_ejes(self, size=1.0, thickness=2):
+        axis = gfx.AxesHelper(size, thickness)
+        self.scene.add(axis)
+
+    def render(self):
+        dt = self.clock.get_delta()
+        self.mixer.update(dt)  # Importante: actualizar el mixer antes de renderizar
+        self.renderer.render(self.scene, self.camera)
+        return np.array(self.canvas.draw())
