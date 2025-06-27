@@ -1,0 +1,28 @@
+# Núcleo visión + 3D
+numpy
+opencv-contrib-python
+pyrender @ git+https://github.com/mmatl/pyrender.git
+trimesh
+scipy         # lo exige trimesh
+networkx      # lo exige trimesh
+PyOpenGL
+PyOpenGL-accelerate
+
+# Voz I/O
+SpeechRecognition
+PyAudio
+vosk
+sounddevice
+gTTS
+pyttsx3
+num2words
+requests      # descarga voces/modelos
+
+# Souvenir / segmentación
+mediapipe
+
+# Utilidades y scripts opcionales
+pygltflib     # check_animations.py
+matplotlib    # visor_modelo.py y tests
+
+# PROBAR pygfx  -> errores

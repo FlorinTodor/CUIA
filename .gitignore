@@ -7,6 +7,7 @@ stats/*.json
 souvers/*.png
 *.pdf
 *.txt
+!requirements.txt
 github_profesor/*
 *.zip
 CUIA_Florin_Emanuel_Todor_GLiga
