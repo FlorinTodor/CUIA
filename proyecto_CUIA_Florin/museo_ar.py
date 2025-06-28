@@ -21,8 +21,12 @@ from camera         import cameraMatrix as cam_matrix, distCoeffs as dist_coeffs
 import voice, qa
 from visitor_extras import souvenir      # ← ya usa mailer
 import contextlib, json
-import reconocer_caras as rc             # login / registro
-import user_data, mailer                 # ← NUEVO (mailer.py)
+from login_ui import get_user
+user = get_user()
+if user is None:
+    sys.exit(0)            # usuario cerró antes de entrar
+username, email_addr = user
+current_user = {"username": username, "email": email_addr}
 
 with open("museo_data.json", encoding="utf-8") as f:
     _DATA = json.load(f)
@@ -56,39 +60,10 @@ face_bbox, current_facehash = None, None
 FACE_TTL = 30
 face_ttl = 0
 
-# ────────── login / registro ─────────────────────────────────────
-def login_or_register(cap):
-    print("⏳ Buscando rostro para login/registro...")
-    while True:
-        ok, frame = cap.read()
-        if not ok: raise RuntimeError("⛔ No hay cámara")
-
-        auth = rc.authenticate(frame)
-        if auth:
-            username, info = auth
-            print(f"✅ Bienvenido de nuevo, {username}")
-            return username, info["email"]           # ← cambiado
-
-        cv2.putText(frame, "Pulsa 'r' para registrarte", (60,60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-        cv2.imshow("Login", frame)
-        if cv2.waitKey(30) & 0xFF == ord('r'):
-            username = input("Nombre de usuario: ").strip()
-            email    = input("Tu correo electrónico: ").strip()
-            try:
-                rc.register(frame, username, email)
-                print(f"🆗 Registro completado. ¡Hola, {username}!")
-                return username, email
-            except ValueError as e:
-                print(e)
-
 # ────────── cámara + renderer ────────────────────────────────────
 cap = cv2.VideoCapture(0)
 renderer = pyrender.OffscreenRenderer(640, 480)
 
-username, email_addr = login_or_register(cap)
-current_user = {"username": username, "email": email_addr}
-cv2.destroyWindow("Login")
 
 # ────────── OpenCV util ──────────────────────────────────────────
 face_cascade = cv2.CascadeClassifier(
