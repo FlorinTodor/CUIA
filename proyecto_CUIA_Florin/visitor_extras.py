@@ -8,6 +8,7 @@
 ```"""
 from __future__ import annotations
 import cv2, numpy as np, pathlib, queue, threading, datetime as _dt, warnings, os
+import telegram_bot  # importar el bot de Telegram
 
 SHOW_BBOX = False  # cambia a True si quieres depurar la ROI
 
@@ -30,19 +31,20 @@ class _SouvenirMaker:
             self._mp_seg = None
 
     # ---------- API pública -------------------------------------
-    def request(self, frame_bgr: np.ndarray, bbox: tuple[int,int,int,int], zona: str):
-        print("[Souvenir] encolado")
-        self._jobs.put((frame_bgr.copy(), bbox, zona))
-
+    def request(self, frame_bgr, bbox, zona, chat_id):
+        """Encola el trabajo completo (incluye a quién mandar el Telegram)."""
+        self._jobs.put((frame_bgr.copy(), bbox, zona, chat_id))
     # ---------- Worker -----------------------------------------
     def _worker(self):
         while True:
-            f,b,z = self._jobs.get()
+            frame, bbox, zona, chat_id = self._jobs.get()
             try:
-                self._make(f,b,z)
+                img = self._make(frame, bbox, zona)
+                telegram_bot.send_photo(chat_id, img)
+                print("[Souvenir] enviado a Telegram")
             except Exception as e:
-                warnings.warn(f"[Souvenir] error: {e}")
-
+                warnings.warn(f"[Souvenir] Telegram error: {e}")
+                
     # ---------- helpers ----------------------------------------
     @staticmethod
     def _ensure_alpha(img: np.ndarray|None):
@@ -97,9 +99,9 @@ class _SouvenirMaker:
             cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,255),2)
         cv2.putText(frame,"Museo AR - Souvenir", (10,frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,255),2)
         out=_SOUV_DIR / f"souvenir_{_dt.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.png"
-        cv2.imwrite(str(out),frame)
+        cv2.imwrite(str(out), frame)
         print(f"[Souvenir] guardado en {out}")
-
+        return frame  
 souvenir = _SouvenirMaker()
 
 __all__ = ["souvenir"]

@@ -26,3 +26,10 @@ pygltflib     # check_animations.py
 matplotlib    # visor_modelo.py y tests
 
 # PROBAR pygfx  -> errores
+
+# face recognition y telegram bot
+
+face_recognition
+python-telegram-bot==20.7 
+requests 
+dlib

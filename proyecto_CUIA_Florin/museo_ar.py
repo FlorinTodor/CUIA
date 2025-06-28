@@ -28,6 +28,8 @@ from visitor_extras import souvenir
 import contextlib
 import cuia
 import json
+import reconocer_caras as rc
+import user_data, telegram_bot
 with open("museo_data.json", encoding="utf-8") as f:
     _DATA  = json.load(f)
     
@@ -71,14 +73,57 @@ FACE_TTL         = 30          # frames que “vive” la misma cara
 face_ttl         = 0
 
 
+
+
+# ────────── login / registro ─────────────────────────────────────
+def login_or_register(cap):
+    print("⏳ Buscando rostro para login/registro...")
+    while True:
+        ok, frame = cap.read()
+        if not ok:  raise RuntimeError("⛔ No hay cámara")
+
+        auth = rc.authenticate(frame)
+        if auth:
+            username, info = auth
+            print(f"✅ Bienvenido de nuevo, {username}")
+            return username, info["telegram"]
+
+        cv2.putText(frame, "Pulsa 'r' para registrarte", (60,60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        cv2.imshow("Login", frame)
+        k = cv2.waitKey(30) & 0xFF
+        if k == ord('r'):          # registro
+            username = input("Introduce tu nombre de usuario: ").strip()
+            telegram = input("Introduce tu @telegram: ").strip()
+            try:
+                rc.register(frame, username, telegram)
+                print("🆗 Registro completado. ¡Hola,", username, "!")
+                return username, telegram
+            except ValueError as e:
+                print(e)
+                continue
+
 # ────────── cámara + renderer ──────────────────────────────────────
 cap       = cv2.VideoCapture(0)
 renderer  = pyrender.OffscreenRenderer(640, 480)
+# login ───────────────────────────────────────────────────────────
+username, tg_handle = login_or_register(cap)
+current_user = {"username": username, "telegram": tg_handle}
+cv2.destroyWindow("Login")
+
 
 
 # ────────── OpenCV util ────────────────────────────────────────────
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+def cv_to_gl_pose(rvec, tvec):
+    """Devuelve matriz 4×4 en coordenadas OpenGL a partir de rvec/tvec OpenCV"""
+    M          = np.eye(4, dtype=np.float32)
+    M[:3, :3]  = cv2.Rodrigues(rvec)[0]
+    M[:3, 3]   = tvec.reshape(3)          # FLATTEN: (3,1) → (3,)
+    M[[1, 2]] *= -1                       # invierte ejes Y y Z
+    return np.linalg.inv(M)               # cámara activa ≡ invertir
 
 def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
     """Renderiza el modelo 3D sobre la imagen usando pyrender."""
@@ -120,6 +165,8 @@ signal.signal(signal.SIGINT,  cerrar)
 signal.signal(signal.SIGTERM, cerrar)
 
 
+
+
 # ═════════════════════════  bucle principal  ══════════════════════
 while True:
     if stop_evt.is_set():
@@ -139,6 +186,7 @@ while True:
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             esquinas, 0.05, cam_matrix, distCoeffs=dist_coeffs
         )
+        print("tvec:", tvecs[0].ravel(), "  rvec:", rvecs[0].ravel())
         for i, id_arr in enumerate(ids):
             mid           = int(id_arr[0])
             #print("ID ArUco detectado:", mid) # debug
@@ -206,11 +254,14 @@ while True:
 
         if q == "souvenir":
             if face_bbox and face_ttl > 0:
-                souvenir.request(frame, face_bbox, zona_estable)
-                tts_q.put("Souvenir guardado")
+                # El worker de visitor_extras ya lo envía a Telegram
+                souvenir.request(frame,
+                                 face_bbox,
+                                 zona_estable,
+                                 current_user["telegram"])
+                tts_q.put("¡Souvenir enviado a tu Telegram!")
             else:
                 tts_q.put("Necesito ver tu cara para el souvenir")
-            continue
 
         # otras preguntas
         respuesta = qa.responder(q, marcador_visible, zona_estable)
