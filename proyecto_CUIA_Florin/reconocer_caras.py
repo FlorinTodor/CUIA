@@ -1,22 +1,23 @@
-import cv2, face_recognition, numpy as np, user_data
+import cv2, face_recognition, user_data
 
-def encode_faces(image):
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    enc  = face_recognition.face_encodings(rgb)
-    return enc                   # lista (0 – n) encodings
+def encode_faces(img):
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return face_recognition.face_encodings(rgb)
 
 def authenticate(frame):
-    enc = encode_faces(frame)
-    if not enc:                     # sin cara
+    encs = encode_faces(frame)
+    if not encs:
         return None
-    for uname, info in user_data.all_users().items():
-        known = np.array(info["encoding"])
-        if face_recognition.compare_faces([known], enc[0])[0]:
-            return uname, info      # éxito
+    probe = encs[0]
+    for uname, info in user_data.all().items():
+        if "encoding" not in info:
+            continue
+        if face_recognition.compare_faces([info["encoding"]], probe)[0]:
+            return uname, info          # info incluye 'email'
     return None
 
-def register(frame, username, telegram):
-    enc = encode_faces(frame)
-    if not enc:
-        raise ValueError("No se encontró ningún rostro.")
-    user_data.add_user(username, telegram, enc[0])
+def register(frame, username, email):
+    encs = encode_faces(frame)
+    if not encs:
+        raise ValueError("No se encontró rostro")
+    user_data.add_user(username, email=email, encoding=encs[0])

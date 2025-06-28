@@ -8,7 +8,7 @@
 ```"""
 from __future__ import annotations
 import cv2, numpy as np, pathlib, queue, threading, datetime as _dt, warnings, os
-import telegram_bot  # importar el bot de Telegram
+import mailer
 
 SHOW_BBOX = False  # cambia a True si quieres depurar la ROI
 
@@ -31,19 +31,18 @@ class _SouvenirMaker:
             self._mp_seg = None
 
     # ---------- API pública -------------------------------------
-    def request(self, frame_bgr, bbox, zona, chat_id):
-        """Encola el trabajo completo (incluye a quién mandar el Telegram)."""
-        self._jobs.put((frame_bgr.copy(), bbox, zona, chat_id))
+    def request(self, frame_bgr, bbox, zona, email):
+        self._jobs.put((frame_bgr.copy(), bbox, zona, email))
     # ---------- Worker -----------------------------------------
     def _worker(self):
         while True:
-            frame, bbox, zona, chat_id = self._jobs.get()
+            frame, bbox, zona, email = self._jobs.get()
             try:
                 img = self._make(frame, bbox, zona)
-                telegram_bot.send_photo(chat_id, img)
-                print("[Souvenir] enviado a Telegram")
+                mailer.send_photo(email, img)
+                print("[Souvenir] enviado por correo a", email)
             except Exception as e:
-                warnings.warn(f"[Souvenir] Telegram error: {e}")
+                warnings.warn(f"[Souvenir] email error: {e}")
                 
     # ---------- helpers ----------------------------------------
     @staticmethod
