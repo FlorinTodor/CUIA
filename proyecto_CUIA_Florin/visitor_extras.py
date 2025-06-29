@@ -76,10 +76,12 @@ class _SouvenirMaker:
         if w<=0 or h<=0:
             print("[Souvenir] bbox inválido"); return
         original=frame.copy()
+        # recorta la ROI
         if self.plane is not None:
             plane=cv2.resize(self.plane,(frame.shape[1],frame.shape[0]), interpolation=cv2.INTER_AREA)
             plane[:,:,3]=255
             self._overlay(frame,plane,0,0)
+        # recorta la ROI del frame
         if self._mp_seg is not None:
             seg=self._mp_seg.process(cv2.cvtColor(original,cv2.COLOR_BGR2RGB)).segmentation_mask
             mask=cv2.GaussianBlur(seg,(7,7),0)
@@ -87,19 +89,17 @@ class _SouvenirMaker:
             mask=cv2.morphologyEx(mask.astype(np.uint8),cv2.MORPH_OPEN, np.ones((7,7),np.uint8))
             mask=cv2.morphologyEx(mask,cv2.MORPH_DILATE, np.ones((9,9),np.uint8))
             n,lbl,stats,_=cv2.connectedComponentsWithStats(mask,8)
-            if n>1:
+            if n>1: # si hay más de un componente, elige el más grande
                 largest=1+np.argmax(stats[1:,cv2.CC_STAT_AREA])
                 mask=(lbl==largest).astype(np.uint8)
             alpha=cv2.GaussianBlur(mask.astype(np.float32),(21,21),0)[:,:,None]
             frame[:]=(frame*(1-alpha)+original*alpha).astype(np.uint8)
-        else:
+        else: # si no hay MediaPipe, usa el frame original
             frame[y:y+h,x:x+w]=original[y:y+h,x:x+w]
         if SHOW_BBOX:
+            # dibuja la ROI en el frame
             cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,255),2)
         cv2.putText(frame,"Museo AR - Souvenir", (10,frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,255),2)
-        out=_SOUV_DIR / f"souvenir_{_dt.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.png"
-        cv2.imwrite(str(out), frame)
-        print(f"[Souvenir] guardado en {out}")
         return frame  
 souvenir = _SouvenirMaker()
 

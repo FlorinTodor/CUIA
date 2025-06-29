@@ -78,6 +78,8 @@ face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 # 2----- en tu overlay_modelo (museo_ar.py) ────────────────────────
+
+## METODO NO FUNCIONAL
 def cv_to_gl_pose(rvec, tvec):
     """
     • rvec / tvec: salida directa de solvePnP / estimatePoseSingleMarkers
@@ -113,9 +115,9 @@ def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
         color = np.dstack((color, np.zeros((h, w), np.uint8)))
         color[:, :, 3] = (depth > 0).astype(np.uint8) * 255
             # ②  truco “alfa nunca cero”  (evita píxeles negros al componer)
-        mask_zero = (color[..., 3] == 0)
+        mask_zero = (color[:,:, 3] == 0)
         if np.any(mask_zero):
-                color[..., 3][mask_zero] = 1 
+                color[:,:, 3][mask_zero] = 1 
         return cv2.cvtColor(alphaBlending(color, frame), cv2.COLOR_BGRA2BGR)
    
 

@@ -26,7 +26,7 @@ with open("museo_data.json", encoding="utf-8") as f:
 # CONFIGURACIÓN ----------------------------------------------------------------
 MODELOS = {int(k): v for k, v in _DATA["model_paths"].items()}
 
-SCALE_MAX = 0.05  # metros (≈ 5 cm) → tamaño máximo del modelo
+SCALE_MAX = 0.04  # metros (≈ 5 cm) → tamaño máximo del modelo
 CACHE_DIR = "cache_models"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -34,25 +34,20 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # FUNCIONES AUXILIARES --------------------------------------------------------
 
 def _procesar_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """Centra en el origen, uniformiza escala y alinea ejes."""
-    center = mesh.bounds.mean(axis=0)
-    mesh.apply_translation(-center)
-    # Escala uniforme al tamaño máximo indicado
-    scale_factor = SCALE_MAX / np.max(mesh.extents)
-    mesh.apply_scale(scale_factor)       # escala
+    """► centra, escala uniforme y re-orienta la malla ◄"""
+    # 1 centro en (0,0,0)
+    mesh.apply_translation(-mesh.bounds.mean(axis=0))
 
+    # 2 escala: el mayor eje pasa a medir 5 cm
+    mesh.apply_scale(0.05 / mesh.extents.max())     #  0.05 m = 5 cm
+
+    # 3 gira –90° sobre X  (conveni CV → OpenGL)
     Rx = trimesh.transformations.rotation_matrix(-np.pi/2, (1,0,0))
-   # Rz = trimesh.transformations.rotation_matrix(np.pi, (0,0,1))
-   # Ry = trimesh.transformations.rotation_matrix(-np.pi/2, (0,1,0))
-    mesh.apply_transform(Rx)      # ← orden: derecha→izquierda
-                               # rota
+    mesh.apply_transform(Rx)
 
-    # ── FLOTA (corrige el min-z definitivo) ──────────────────────
-    min_z = mesh.vertices[:, 2].min()
-    mesh.apply_translation((0, 0, -min_z))       # levanta justo hasta Z=0
-    print(f"[DEBUG] min_z tras flotar = {mesh.vertices[:,2].min():.5f} m")
+    # 4 «flota»: la parte más baja toca Z = 0
+    mesh.apply_translation((0, 0, -mesh.vertices[:,2].min()))
     return mesh
-
 
 def _cargar_trimesh(ruta: str) -> trimesh.Trimesh:
     """Carga un archivo .glb/.gltf y lo devuelve como único Trimesh."""
