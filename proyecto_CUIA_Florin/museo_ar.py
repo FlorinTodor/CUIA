@@ -78,34 +78,46 @@ face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 # 2----- en tu overlay_modelo (museo_ar.py) ────────────────────────
-
+def cv_to_gl_pose(rvec, tvec):
+    """
+    • rvec / tvec: salida directa de solvePnP / estimatePoseSingleMarkers
+    • devuelve la matriz 4×4 (obj → cámara) que espera Pyrender,
+      corrigiendo los ejes Y-Z y aplicando la inversión necesaria.
+    """
+    M          = np.eye(4, dtype=np.float32)
+    M[:3, :3]  = cv2.Rodrigues(rvec)[0]
+    M[:3,  3]  = tvec.reshape(3)
+    M[[1, 2]] *= -1           # Y,Z ➜ –Y,–Z  (convención OpenGL)
+    return np.linalg.inv(M)   # cámara activa ⇒ invertimos
 
 def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
     """Renderiza el modelo 3D sobre la imagen usando pyrender."""
-    try:
-        pose = np.eye(4, dtype=np.float32)
-        pose[:3, :3], _ = cv2.Rodrigues(rvec)
-        pose[:3, 3] = tvec
-        scene = pyrender.Scene(bg_color=[0, 0, 0, 0],
-                               ambient_light=[.4, .4, .4, 1])
-        scene.add(mesh, pose=pose)
-        scene.add(pyrender.DirectionalLight(color=np.ones(3), intensity=5.),
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3], _ = cv2.Rodrigues(rvec)
+    pose[:3, 3] = tvec
+    scene = pyrender.Scene(bg_color=[0, 0, 0, 0],
+                               ambient_light=[1, 1, 1, 1])
+    scene.add(mesh, pose=pose)
+    scene.add(pyrender.DirectionalLight(color=np.ones(3), intensity=5.),
                   pose=np.eye(4))
 
-        cam = pyrender.IntrinsicsCamera(cam_matrix[0, 0], cam_matrix[1, 1],
+    cam = pyrender.IntrinsicsCamera(cam_matrix[0, 0], cam_matrix[1, 1],
                                         cam_matrix[0, 2], cam_matrix[1, 2],
                                         0.005, 10)
-        cam_pose = np.eye(4); cam_pose[2, 3] = 0.2
-        scene.add(cam, pose=cam_pose)
+    cam_pose = np.eye(4); cam_pose[2, 3] = 0.2
+    scene.add(cam, pose=cam_pose)
 
-        color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-        if color.shape[2] == 3:                       # sin alpha → añádelo
-            h, w, _ = color.shape
-            color = np.dstack((color, np.zeros((h, w), np.uint8)))
+    color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+    if color.shape[2] == 3:                       # sin alpha → añádelo
+        h, w, _ = color.shape
+        color = np.dstack((color, np.zeros((h, w), np.uint8)))
         color[:, :, 3] = (depth > 0).astype(np.uint8) * 255
+            # ②  truco “alfa nunca cero”  (evita píxeles negros al componer)
+        mask_zero = (color[..., 3] == 0)
+        if np.any(mask_zero):
+                color[..., 3][mask_zero] = 1 
         return cv2.cvtColor(alphaBlending(color, frame), cv2.COLOR_BGRA2BGR)
-    except Exception:
-        return frame
+   
 
 # ───────────────────── Función de cierre ─────────────────────────
 def cerrar(*_):
@@ -133,7 +145,13 @@ while True:
     if ids is not None:
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             esquinas, MARKER_SIZE, cam_matrix, distCoeffs=dist_coeffs)
-
+        """
+        El bucle for recorre los IDs detectados y actualiza el estado:
+        - Si el ID es el mismo que el último marcador visible, incrementa el contador.
+        - Si el ID es diferente, reinicia el contador a 1.
+        - Si el contador alcanza el umbral de visibilidad, renderiza el modelo.
+        - Si no hay IDs detectados, decrementa el contador y resetea el marcador visible.
+        """
         for i, id_arr in enumerate(ids):
             mid = int(id_arr[0])
             contador_vis  = contador_vis+1 if mid==marcador_visible else 1

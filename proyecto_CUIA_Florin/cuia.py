@@ -7,7 +7,20 @@ import os
 from wgpu.gui.offscreen import WgpuCanvas # Para el render offscreen
 import pygfx as gfx
 import pylinalg as la # Álgebra lineal para las transformaciones geométricas
+def from_cv_to_gl(rvec, tvec):
+    M = np.eye(4, dtype=np.float32)
+    M[:3, :3] = cv2.Rodrigues(rvec)[0]
+    M[:3, 3]  = tvec.reshape(3)   #   ←  ¡flatten!
+    M[[1,2]] *= -1                #   Y/Z a convención GL
+    return np.linalg.inv(M)
 
+def fromOpencvToPygfx(rvec, tvec):
+    pose = np.eye(4)
+    pose[0:3,3] = tvec.T
+    pose[0:3,0:3] = cv2.Rodrigues(rvec)[0]
+    pose[1:3] *= -1  # Inversión de los ejes Y y Z
+    pose = np.linalg.inv(pose)
+    return(pose)
 
 def popup(titulo, imagen):
     cv2.imshow(titulo, imagen)
@@ -203,15 +216,7 @@ def alphaBlending(fg, bg, x=0, y=0):
     res[:, :, 3] = np.uint8(a0[:, :, 0] * 255.0)
 
     return res
-# ── FOV a partir de la matriz de cámara de OpenCV ─────────────────────────
-def fov(K, w, h):
-    fx, fy = K[0, 0], K[1, 1]
-    if w >= h:
-        return np.degrees(2 * np.arctan(h / (2 * fy)))
-    else:
-        return np.degrees(2 * np.arctan(w / (2 * fx)))
-    
-    
+
 def proyeccion(puntos, rvec, tvec, cameraMatrix, distCoeffs):
     if isinstance(puntos, list):
         return(proyeccion(np.array(puntos, dtype=np.float32), rvec, tvec, cameraMatrix, distCoeffs))
@@ -326,7 +331,6 @@ class matrizDeTransformacion:
     
     def __repr__(self):
         return f"matrizDeTransformacion(\n{self.matrix}\n)"
-
 
 
 
