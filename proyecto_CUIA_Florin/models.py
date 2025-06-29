@@ -33,14 +33,18 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # FUNCIONES AUXILIARES --------------------------------------------------------
 
-def _procesar_trimesh(mesh):
-    mesh.apply_translation(-mesh.bounds.mean(axis=0))            # centra
-    mesh.apply_scale(SCALE_MAX / np.max(mesh.extents))           # escala
+def _procesar_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Centra en el origen, uniformiza escala y alinea ejes."""
+    center = mesh.bounds.mean(axis=0)
+    mesh.apply_translation(-center)
+    # Escala uniforme al tamaño máximo indicado
+    scale_factor = SCALE_MAX / np.max(mesh.extents)
+    mesh.apply_scale(scale_factor)       # escala
 
     Rx = trimesh.transformations.rotation_matrix(-np.pi/2, (1,0,0))
    # Rz = trimesh.transformations.rotation_matrix(np.pi, (0,0,1))
    # Ry = trimesh.transformations.rotation_matrix(-np.pi/2, (0,1,0))
-    mesh.apply_transform(Rx )      # ← orden: derecha→izquierda
+    mesh.apply_transform(Rx)      # ← orden: derecha→izquierda
                                # rota
 
     # ── FLOTA (corrige el min-z definitivo) ──────────────────────

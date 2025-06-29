@@ -26,13 +26,9 @@ pygltflib     # check_animations.py
 matplotlib    # visor_modelo.py y tests
 
 # PROBAR pygfx  -> errores
-pygfx
-gltflib
-imageio 
 
-# face recognition y telegram bot
 
+# face recognition y mail
 face_recognition
-python-telegram-bot==20.7 
 requests 
 dlib
