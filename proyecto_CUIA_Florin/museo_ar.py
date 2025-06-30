@@ -68,11 +68,30 @@ contador_vis       = 0
 contador_zona      = {}
 face_bbox, current_facehash, face_ttl = None, None, 0
 
-# ───────────────────── Renderizador y cámara ─────────────────────
+#───────────────────── Renderizador, Escena y Cámara Virtual ─────────────────────
+
 WIDTH, HEIGHT = 640, 480
-renderer      = pyrender.OffscreenRenderer(WIDTH, HEIGHT)
 cap           = cv2.VideoCapture(0)
 
+# 1. Crear el renderizador una sola vez
+renderer = pyrender.OffscreenRenderer(WIDTH, HEIGHT)
+
+# 2. Crear la escena una sola vez
+scene = pyrender.Scene(bg_color=[0, 0, 0, 0], ambient_light=[0.3, 0.3, 0.3])
+
+# 3. Crear la cámara virtual (intrínseca) una sola vez
+# Usamos los parámetros de tu cámara real
+cam_virt = pyrender.IntrinsicsCamera(fx=cam_matrix[0, 0], fy=cam_matrix[1, 1],
+                                     cx=cam_matrix[0, 2], cy=cam_matrix[1, 2],
+                                     znear=0.01, zfar=100.0)
+cam_node = scene.add(cam_virt, pose=np.eye(4)) # Añadimos a la escena, la pose se actualizará luego
+
+# 4. Añadir una luz a la escena una sola vez
+light = pyrender.DirectionalLight(color=[1, 1, 1], intensity=2.0)
+scene.add(light, pose=np.eye(4))
+
+# 5. Crear un NODO CONTENEDOR para el modelo. Lo reutilizaremos.
+model_node = scene.add(pyrender.Mesh.from_trimesh([]), pose=np.eye(4))
 # ───────────────────── OpenCV util ───────────────────────────────
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -80,46 +99,54 @@ face_cascade = cv2.CascadeClassifier(
 # 2----- en tu overlay_modelo (museo_ar.py) ────────────────────────
 
 ## METODO NO FUNCIONAL
+# ESTA FUNCIÓN ESTÁ BIEN Y AHORA LA VAMOS A USAR
 def cv_to_gl_pose(rvec, tvec):
     """
-    • rvec / tvec: salida directa de solvePnP / estimatePoseSingleMarkers
-    • devuelve la matriz 4×4 (obj → cámara) que espera Pyrender,
-      corrigiendo los ejes Y-Z y aplicando la inversión necesaria.
+    Convierte la pose de OpenCV (rvec, tvec) a la matriz de pose 4x4 para
+    la cámara en OpenGL/Pyrender, siguiendo la lógica del notebook del profesor.
     """
-    M          = np.eye(4, dtype=np.float32)
-    M[:3, :3]  = cv2.Rodrigues(rvec)[0]
-    M[:3,  3]  = tvec.reshape(3)
-    M[[1, 2]] *= -1           # Y,Z ➜ –Y,–Z  (convención OpenGL)
-    return np.linalg.inv(M)   # cámara activa ⇒ invertimos
+    # 1. Crear la matriz de pose del marcador respecto a la cámara (estilo OpenCV)
+    #    pose = [ R | t ]
+    #         [ 0 | 1 ]
+    pose_marker_cv = np.eye(4, dtype=np.float32)
+    pose_marker_cv[:3, :3] = cv2.Rodrigues(rvec)[0]
+    pose_marker_cv[:3, 3] = tvec.ravel()
 
-def overlay_modelo(frame, esquinas, rvec, tvec, mesh):
-    """Renderiza el modelo 3D sobre la imagen usando pyrender."""
-    pose = np.eye(4, dtype=np.float32)
-    pose[:3, :3], _ = cv2.Rodrigues(rvec)
-    pose[:3, 3] = tvec
-    scene = pyrender.Scene(bg_color=[0, 0, 0, 0],
-                               ambient_light=[1, 1, 1, 1])
-    scene.add(mesh, pose=pose)
-    scene.add(pyrender.DirectionalLight(color=np.ones(3), intensity=5.),
-                  pose=np.eye(4))
+    # 2. Invertir los ejes Y y Z de la matriz de POSE COMPLETA.
+    #    Esto es equivalente a rotar 180 grados sobre el eje X.
+    #    [x, y, z] -> [x, -y, -z]
+    pose_marker_cv[[1, 2]] *= -1
 
-    cam = pyrender.IntrinsicsCamera(cam_matrix[0, 0], cam_matrix[1, 1],
-                                        cam_matrix[0, 2], cam_matrix[1, 2],
-                                        0.005, 10)
-    cam_pose = np.eye(4); cam_pose[2, 3] = 0.2
-    scene.add(cam, pose=cam_pose)
+    # 3. La pose de la CÁMARA es la INVERSA de la pose del MARCADOR.
+    #    Si el mundo está en la pose M respecto a la cámara, la cámara
+    #    está en la pose M^-1 respecto al mundo.
+    cam_pose = np.linalg.inv(pose_marker_cv)
 
+    return cam_pose
+
+def overlay_modelo(frame, mesh, cam_pose):
+    """
+    Renderiza un modelo en la escena global y lo superpone al frame.
+    REUTILIZA los nodos existentes de la cámara y del modelo.
+    """
+    # 1. Actualizar el mesh del nodo del modelo
+    scene.set_pose(model_node, pose=np.eye(4)) # Aseguramos que el modelo esté en el origen
+    model_node.mesh = mesh
+
+    # 2. Actualizar la pose de la CÁMARA VIRTUAL
+    scene.set_pose(cam_node, pose=cam_pose)
+
+    # 3. Renderizar la escena
     color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
-    if color.shape[2] == 3:                       # sin alpha → añádelo
-        h, w, _ = color.shape
-        color = np.dstack((color, np.zeros((h, w), np.uint8)))
-        color[:, :, 3] = (depth > 0).astype(np.uint8) * 255
-            # ②  truco “alfa nunca cero”  (evita píxeles negros al componer)
-        mask_zero = (color[:,:, 3] == 0)
-        if np.any(mask_zero):
-                color[:,:, 3][mask_zero] = 1 
-        return cv2.cvtColor(alphaBlending(color, frame), cv2.COLOR_BGRA2BGR)
-   
+
+    # 4. Lógica de Alpha Blending (la tuya es perfecta)
+    mask = (depth > 0).astype(np.uint8) * 255
+    if color.shape[2] == 3:
+        color = np.dstack((color, mask))
+    else:
+        color[:, :, 3] = mask
+        
+    return alphaBlending(color, frame)
 
 # ───────────────────── Función de cierre ─────────────────────────
 def cerrar(*_):
@@ -163,16 +190,29 @@ while True:
             if contador_vis >= UMBRAL_VISIBILIDAD:
                 mesh = modelos_precargados.get(mid)
                 if mesh is not None:
-                    frame = overlay_modelo(frame, esquinas[i],
-                                           rvecs[i], tvecs[i], mesh)
+                    # 1. Calcular la pose de la cámara usando la función correcta
+                   # (A) Asegúrate de que rvecs[i] y tvecs[i] se usan aquí
+                    current_rvec = rvecs[i]
+                    current_tvec = tvecs[i]
+
+                    # (B) Se calcula una NUEVA pose en CADA fotograma
+                    camera_pose = cv_to_gl_pose(current_rvec, current_tvec)
+                    
+                    # (C) Se pasa esta nueva pose a la función de overlay
+                    frame = overlay_modelo(frame, mesh, camera_pose)
+                    
+                    # El resto es para depuración visual
                     cv2.drawFrameAxes(frame, cam_matrix, dist_coeffs,
-                                      rvecs[i], tvecs[i], 0.05, 3)
+                                      current_rvec, current_tvec, 0.05, 3)
                     cv2.polylines(frame, [esquinas[i].astype(int)],
                                   True, (0,255,0), 2)
+
     else:
         contador_vis = max(0, contador_vis-1)
         if contador_vis == 0:
             marcador_visible = None
+            # Ocultamos el modelo asignando una malla vacía
+            model_node.mesh = pyrender.Mesh.from_trimesh([])
 
     # 3 ◉ Detección facial (bbox souvenir)
     if face_ttl > 0: face_ttl -= 1

@@ -41,8 +41,8 @@ def _procesar_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     # 2 escala: el mayor eje pasa a medir 5 cm
     mesh.apply_scale(0.05 / mesh.extents.max())     #  0.05 m = 5 cm
 
-    # 3 gira –90° sobre X  (conveni CV → OpenGL)
-    Rx = trimesh.transformations.rotation_matrix(-np.pi/2, (1,0,0))
+   # 3. Rotación de ajuste: Ponemos el modelo "acostado" rotándolo +90º sobre el eje X.
+    Rx = trimesh.transformations.rotation_matrix(np.pi/2, (1, 0, 0))
     mesh.apply_transform(Rx)
 
     # 4 «flota»: la parte más baja toca Z = 0
