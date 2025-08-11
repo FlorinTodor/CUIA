@@ -1,20 +1,20 @@
 # Museo AR – Proyecto CUIA
 
 ## 📌 Descripción
-**Museo AR** es una aplicación de realidad aumentada desarrollada en el marco de la asignatura **Computación Ubicua e Inteligencia Ambiental (CUIA)**.  
+**Museo AR** es una aplicación de realidad aumentada desarrollada en el marco de la asignatura **Computación Ubicua e Inteligencia Ambiental (CUIA) UGR 24/25**.  
 Permite al visitante de un museo interactuar con modelos 3D de objetos de la Segunda Guerra Mundial mediante **marcadores ArUco**, **reconocimiento de voz**, y **souvenirs personalizados** con reconocimiento facial.
 
 **Funciones principales:**
 - Visualizar modelos 3D alineados con el mundo real mediante la cámara.
 - Consultar información sobre las piezas por voz.
 - Generar y enviar por email un recuerdo fotográfico.
-- Consciencia de contexto: identificación de zonas temáticas por imagen o marcador:contentReference[oaicite:7]{index=7}.
+- Consciencia de contexto: identificación de zonas temáticas por imagen o marcador
 
 ---
 
 ## 🎯 Objetivo y alcance
 El sistema transforma un portátil con webcam en una guía de RA:
-- Detección de marcadores **DICT_5X5_50** → renderizado de modelos **glTF**:contentReference[oaicite:8]{index=8}.
+- Detección de marcadores **DICT_5X5_50** → renderizado de modelos **glTF**
 - Respuestas de voz a preguntas sobre los objetos expuestos.
 - Generación de souvenirs fotográficos enviados por correo electrónico.
 - Registro persistente de usuario por reconocimiento facial.
